@@ -12,6 +12,16 @@ using System.Collections.Generic;
 /// 元のスクリプトと違い、リングから外れても試行を打ち切らず、
 /// 外れている間は回転をカウントしないだけの仕様にしてある（ゲームとして遊びやすくするため）。
 /// 必要であれば、外れた瞬間に即失敗にする「abort-on-exit」方式に戻すことも可能。
+///
+/// リセットは物理ボタン方式：リング右上に生成される球（ResetButton）に
+/// tipTransformをresetHoldSeconds秒(既定2秒)触れ続けると、状態（Waiting/Playing/Cleared/Failed）に
+/// 関係なくいつでも強制リセットできる。ボタンはリングと同じ平面上（同じ奥行き）に置かれるため、
+/// カメラ（顔）の近くに浮いて視界を塞ぐことはない。
+///
+/// 実機ビルドでは"Standard"シェーダーが含まれずShader.Findがnullを返すことがあるため、
+/// ボタンの色にはLineRendererと同じ"Sprites/Default"（実機で動作確認済み）を使う。
+/// また、ボタン生成で万一失敗してもステータステキストは必ず表示されるよう、
+/// テキスト生成をボタン生成より先に行い、ボタン生成はtry-catchで保護する。
 /// </summary>
 public class RotationBurstGame : MonoBehaviour
 {
@@ -33,8 +43,17 @@ public class RotationBurstGame : MonoBehaviour
     [Tooltip("クリアに必要なバースト達成回数")]
     public int requiredBursts = 3;
 
-    [Header("リトライ")]
-    public KeyCode retryKey = KeyCode.R;
+    [Header("リセットボタン（棒の先端でresetHoldSeconds秒触れると、いつでも強制リセット）")]
+    [Tooltip("ボタンの位置：リング中心からローカルX（右方向）にどれだけ離すか（メートル）")]
+    public float resetButtonRightOffset = 0.25f;
+    [Tooltip("ボタンの位置：リング中心からローカルZ（上方向）にどれだけ離すか（メートル）")]
+    public float resetButtonUpOffset = 0.22f;
+    [Tooltip("ボタンの見た目のサイズ（直径、メートル）")]
+    public float resetButtonSize = 0.12f;
+    [Tooltip("ボタンの判定半径（この距離以内なら触れているとみなす）")]
+    public float resetButtonRadius = 0.09f;
+    [Tooltip("この秒数だけ触れ続けたらリセットする")]
+    public float resetHoldSeconds = 2f;
 
     [Header("表示設定")]
     public float textLocalX = 0f;
@@ -50,11 +69,14 @@ public class RotationBurstGame : MonoBehaviour
     private Text uiText;
 
     private static readonly Color colorNormal = Color.white;
-    
+
     private static readonly Color colorTouching = new Color(0.3f, 0.7f, 1f); // リングに触れている間
-private static readonly Color colorBurst  = new Color(1f, 0.84f, 0f);   // バースト達成の瞬間
+    private static readonly Color colorBurst  = new Color(1f, 0.84f, 0f);   // バースト達成の瞬間
     private static readonly Color colorClear  = new Color(0.2f, 1f, 0.4f);  // クリア
     private static readonly Color colorFail   = new Color(1f, 0.3f, 0.3f);  // 失敗
+
+    private static readonly Color resetButtonColorIdle = new Color(0.5f, 0.5f, 0.5f); // 未接触
+    private static readonly Color resetButtonColorHeld = new Color(1f, 0.2f, 0.2f);   // 押し込み中〜リセット直前
 
     private enum GameState { Waiting, Playing, Cleared, Failed }
     private GameState state = GameState.Waiting;
@@ -68,13 +90,16 @@ private static readonly Color colorBurst  = new Color(1f, 0.84f, 0f);   // バ�
     private bool burstQualifiedLastFrame = false;
     private int  burstCount = 0;
 
-    
+    // リセットボタン関連
+    private Transform resetButtonTransform;
+    private Renderer  resetButtonRenderer;
+    private float resetHoldTimer = 0f;
 
     // デバッグ表示用（原因切り分け後に削除してよい）
     private float dbgLocalY = 0f;
     private float dbgDistFromRing = 0f;
     private bool  dbgHasTip = false;
-private float flashUntil = -1f;
+    private float flashUntil = -1f;
 
     void Start()
     {
@@ -93,17 +118,45 @@ private float flashUntil = -1f;
 
         UpdateLinePositions();
         SetColor(colorNormal);
+
+        // テキストを先に生成しておく（ボタン生成で何か問題があってもテキストは必ず出るように）
         CreateStatusText();
         UpdateStatusText();
+
+        try
+        {
+            CreateResetButton();
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError("[RotationBurstGame] CreateResetButton failed: " + e);
+        }
+    }
+
+    void CreateResetButton()
+    {
+        GameObject btn = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        btn.name = "ResetButton_" + gameObject.name;
+        Destroy(btn.GetComponent<SphereCollider>());
+        btn.transform.SetParent(this.transform, false);
+        // リングと同じ平面上（ローカルY=0＝リングと同じ奥行き）の右上に配置。
+        // カメラの近くに浮かないようにするため、奥行き方向にはオフセットしない。
+        btn.transform.localPosition = new Vector3(resetButtonRightOffset, 0f, resetButtonUpOffset);
+        btn.transform.localScale    = Vector3.one * resetButtonSize;
+
+        resetButtonRenderer = btn.GetComponent<Renderer>();
+        // "Standard"は実機ビルドでシェーダーが含まれずnullになることがあるため、
+        // LineRendererと同じ実機動作確認済みの"Sprites/Default"を使う。
+        resetButtonRenderer.material = new Material(Shader.Find("Sprites/Default"));
+        resetButtonRenderer.material.color = resetButtonColorIdle;
+
+        resetButtonTransform = btn.transform;
     }
 
     void Update()
     {
-        if ((state == GameState.Cleared || state == GameState.Failed) && Input.GetKeyDown(retryKey))
-        {
-            ResetGame();
-            return;
-        }
+        // リセットボタンは状態に関係なく常にチェックする（いつでも強制リセット可能）
+        HandleResetButton();
 
         if (state == GameState.Cleared)
         {
@@ -210,6 +263,43 @@ private float flashUntil = -1f;
         }
 
         UpdateStatusText();
+    }
+
+    /// <summary>
+    /// 棒の先端がリセットボタンにresetHoldSeconds秒触れ続けたら、状態を問わず強制リセットする。
+    /// ボタンの色を押し込み進捗に応じて変化させ、触れていない間は徐々に進捗を戻す。
+    /// </summary>
+    void HandleResetButton()
+    {
+        if (resetButtonTransform == null) return;
+
+        bool touchingButton = false;
+        if (tipTransform != null)
+        {
+            float dist = Vector3.Distance(tipTransform.position, resetButtonTransform.position);
+            touchingButton = dist <= resetButtonRadius;
+        }
+
+        if (touchingButton)
+        {
+            resetHoldTimer += Time.deltaTime;
+        }
+        else
+        {
+            resetHoldTimer = Mathf.Max(0f, resetHoldTimer - Time.deltaTime * 2f); // 離すと少し早めに進捗が戻る
+        }
+
+        if (resetButtonRenderer != null)
+        {
+            float progress = Mathf.Clamp01(resetHoldTimer / resetHoldSeconds);
+            resetButtonRenderer.material.color = Color.Lerp(resetButtonColorIdle, resetButtonColorHeld, progress);
+        }
+
+        if (resetHoldTimer >= resetHoldSeconds)
+        {
+            resetHoldTimer = 0f;
+            ResetGame();
+        }
     }
 
     void CheckTimeout()
@@ -328,14 +418,14 @@ private float flashUntil = -1f;
 
             case GameState.Cleared:
                 uiText.color = colorClear;
-                uiText.text  = string.Format("クリア！\n[{0}]でリトライ", retryKey);
+                uiText.text  = "クリア！\nリセットボタンに2秒触れてリトライ";
                 break;
 
             case GameState.Failed:
                 uiText.color = colorFail;
                 uiText.text  = string.Format(
-                    "失敗… (バースト {0} / {1})\n[{2}]でリトライ",
-                    burstCount, requiredBursts, retryKey);
+                    "失敗… (バースト {0} / {1})\nリセットボタンに2秒触れてリトライ",
+                    burstCount, requiredBursts);
                 break;
         }
     }
