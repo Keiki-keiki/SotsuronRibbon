@@ -50,7 +50,9 @@ public class RotationBurstGame : MonoBehaviour
     private Text uiText;
 
     private static readonly Color colorNormal = Color.white;
-    private static readonly Color colorBurst  = new Color(1f, 0.84f, 0f);   // バースト達成の瞬間
+    
+    private static readonly Color colorTouching = new Color(0.3f, 0.7f, 1f); // リングに触れている間
+private static readonly Color colorBurst  = new Color(1f, 0.84f, 0f);   // バースト達成の瞬間
     private static readonly Color colorClear  = new Color(0.2f, 1f, 0.4f);  // クリア
     private static readonly Color colorFail   = new Color(1f, 0.3f, 0.3f);  // 失敗
 
@@ -66,7 +68,13 @@ public class RotationBurstGame : MonoBehaviour
     private bool burstQualifiedLastFrame = false;
     private int  burstCount = 0;
 
-    private float flashUntil = -1f;
+    
+
+    // デバッグ表示用（原因切り分け後に削除してよい）
+    private float dbgLocalY = 0f;
+    private float dbgDistFromRing = 0f;
+    private bool  dbgHasTip = false;
+private float flashUntil = -1f;
 
     void Start()
     {
@@ -124,10 +132,16 @@ public class RotationBurstGame : MonoBehaviour
 
         // 半径方向：リングの太さ許容誤差
         float distXZ = new Vector2(local.x, local.z).magnitude;
-        if (!outOfBounds && Mathf.Abs(distXZ - ringRadius) > thicknesHalf)
+        float distFromRing = Mathf.Abs(distXZ - ringRadius);
+        if (!outOfBounds && distFromRing > thicknesHalf)
         {
             outOfBounds = true;
         }
+
+        // デバッグ表示用
+        dbgHasTip = true;
+        dbgLocalY = local.y;
+        dbgDistFromRing = distFromRing;
 
         if (outOfBounds)
         {
@@ -138,6 +152,9 @@ public class RotationBurstGame : MonoBehaviour
             UpdateStatusText();
             return;
         }
+
+        // リングに触れている間は常にタッチ色にする（バースト達成フラッシュ中は除く）
+        if (Time.time >= flashUntil) SetColor(colorTouching);
 
         float angle = Mathf.Atan2(local.z, local.x) * Mathf.Rad2Deg;
 
@@ -190,10 +207,6 @@ public class RotationBurstGame : MonoBehaviour
         if (state == GameState.Playing)
         {
             CheckTimeout();
-            if (Time.time >= flashUntil && state == GameState.Playing)
-            {
-                SetColor(colorNormal);
-            }
         }
 
         UpdateStatusText();
@@ -291,9 +304,18 @@ public class RotationBurstGame : MonoBehaviour
         {
             case GameState.Waiting:
                 uiText.color = Color.white;
-                uiText.text  = string.Format(
-                    "リングをなぞって開始\n(1秒間に{0}回転を{1}回で成功)",
-                    rotationsPerBurst, requiredBursts);
+                if (dbgHasTip)
+                {
+                    uiText.text = string.Format(
+                        "リングをなぞって開始\n(1秒間に{0}回転を{1}回で成功)\n\n[デバッグ] 奥行きズレ:{2:F3}m(許容{3:F3})\nリングまでの距離:{4:F3}m(許容{5:F3})",
+                        rotationsPerBurst, requiredBursts, dbgLocalY, depthTolerance, dbgDistFromRing, thicknesHalf);
+                }
+                else
+                {
+                    uiText.text = string.Format(
+                        "リングをなぞって開始\n(1秒間に{0}回転を{1}回で成功)",
+                        rotationsPerBurst, requiredBursts);
+                }
                 break;
 
             case GameState.Playing:

@@ -15,7 +15,7 @@ public class RightHandStick : MonoBehaviour
 
     private GameObject stick;
 
-void Start()
+    void Start()
     {
         // Cylinderで棒を生成
         stick = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
@@ -35,9 +35,13 @@ void Start()
         tip.transform.localScale = Vector3.one * tipRadius * 2f;
         tip.transform.localPosition = new Vector3(0f, 0f, stickLength);
 
-        // 全てのRingTargetに先端のTransformを渡す
+        // 全てのRingTarget / RotationBurstGameに先端のTransformを渡す
         var rings = FindObjectsOfType<RingTarget>();
         foreach (var ring in rings)
             ring.tipTransform = tip.transform;
+
+        var burstGames = FindObjectsOfType<RotationBurstGame>();
+        foreach (var bg in burstGames)
+            bg.tipTransform = tip.transform;
     }
 }
