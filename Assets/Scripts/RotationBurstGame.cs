@@ -64,6 +64,29 @@ public class RotationBurstGame : MonoBehaviour
     public Transform tipTransform;
     public AudioClip sparkleClip;
 
+    [Header("ランダム出現設定（手の届く範囲）")]
+    [Tooltip("頭の位置。未設定ならCamera.main（CenterEyeAnchor）を使う")]
+    public Transform headTransform;
+    [Tooltip("頭から肩を推定するときの右方向オフセット（メートル。右手用）")]
+    public float shoulderOffsetRight = 0.15f;
+    [Tooltip("頭から肩を推定するときの下方向オフセット（メートル）")]
+    public float shoulderOffsetDown = 0.2f;
+    [Tooltip("肩から棒の先端まで届く距離（メートル）。実機で調整すること")]
+    public float reachRadius = 0.7f;
+    
+    [Tooltip("初期位置を中心に、左右（リング平面のローカルX）へ動かす最大距離（メートル）")]
+    public float spawnRangeRight = 0.3f;
+    [Tooltip("初期位置を中心に、上下（リング平面のローカルZ）へ動かす最大距離（メートル）")]
+    public float spawnRangeUp = 0.25f;
+    
+    
+    [Tooltip("前回のリング中心から最低これだけ離す（メートル）")]
+    public float minSpawnSeparation = 0.2f;
+    [Tooltip("クリア後、次のリングが出るまでの待ち時間（秒）")]
+    public float nextRingDelay = 1f;
+    [Tooltip("true: リング出現と同時に制限時間スタート / false: なぞり始めてからスタート")]
+    public bool timerStartsOnSpawn = true;
+
     private LineRenderer lr;
     private AudioSource audioSource;
     private Text uiText;
@@ -71,9 +94,9 @@ public class RotationBurstGame : MonoBehaviour
     private static readonly Color colorNormal = Color.white;
 
     private static readonly Color colorTouching = new Color(0.3f, 0.7f, 1f); // リングに触れている間
-    private static readonly Color colorBurst  = new Color(1f, 0.84f, 0f);   // バースト達成の瞬間
-    private static readonly Color colorClear  = new Color(0.2f, 1f, 0.4f);  // クリア
-    private static readonly Color colorFail   = new Color(1f, 0.3f, 0.3f);  // 失敗
+    private static readonly Color colorBurst = new Color(1f, 0.84f, 0f);   // バースト達成の瞬間
+    private static readonly Color colorClear = new Color(0.2f, 1f, 0.4f);  // クリア
+    private static readonly Color colorFail = new Color(1f, 0.3f, 0.3f);  // 失敗
 
     private static readonly Color resetButtonColorIdle = new Color(0.5f, 0.5f, 0.5f); // 未接触
     private static readonly Color resetButtonColorHeld = new Color(1f, 0.2f, 0.2f);   // 押し込み中〜リセット直前
@@ -83,37 +106,49 @@ public class RotationBurstGame : MonoBehaviour
 
     private float lastAngle = float.NaN;
     private float cumulativeAngle = 0f;
-    private int   rotationsCounted = 0;
+    private int rotationsCounted = 0;
     private float sessionStartTime = float.NaN;
 
     private readonly Queue<float> rotationTimestamps = new Queue<float>();
     private bool burstQualifiedLastFrame = false;
-    private int  burstCount = 0;
+    private int burstCount = 0;
 
     // リセットボタン関連
     private Transform resetButtonTransform;
-    private Renderer  resetButtonRenderer;
+    private Renderer resetButtonRenderer;
     private float resetHoldTimer = 0f;
+
+    // ランダム出現・スコア関連
+    private int score = 0;
+    private int bestScore = 0;
+    private float nextSpawnTime = 0f;
+    private Vector3 initialPos;
+    private Quaternion initialRot;
+    private Vector3 lastCenter;
 
     // デバッグ表示用（原因切り分け後に削除してよい）
     private float dbgLocalY = 0f;
     private float dbgDistFromRing = 0f;
-    private bool  dbgHasTip = false;
+    private bool dbgHasTip = false;
     private float flashUntil = -1f;
 
     void Start()
     {
+        initialPos = transform.position;
+        initialRot = transform.rotation;
+        lastCenter = initialPos;
+
         lr = gameObject.AddComponent<LineRenderer>();
-        lr.loop          = true;
+        lr.loop = true;
         lr.positionCount = segments;
         lr.useWorldSpace = true;
-        lr.material      = new Material(Shader.Find("Sprites/Default"));
-        lr.startWidth    = thicknesHalf * 2f;
-        lr.endWidth      = thicknesHalf * 2f;
+        lr.material = new Material(Shader.Find("Sprites/Default"));
+        lr.startWidth = thicknesHalf * 2f;
+        lr.endWidth = thicknesHalf * 2f;
 
         audioSource = gameObject.AddComponent<AudioSource>();
-        audioSource.clip        = sparkleClip;
-        audioSource.loop        = false;
+        audioSource.clip = sparkleClip;
+        audioSource.loop = false;
         audioSource.playOnAwake = false;
 
         UpdateLinePositions();
@@ -142,7 +177,7 @@ public class RotationBurstGame : MonoBehaviour
         // リングと同じ平面上（ローカルY=0＝リングと同じ奥行き）の右上に配置。
         // カメラの近くに浮かないようにするため、奥行き方向にはオフセットしない。
         btn.transform.localPosition = new Vector3(resetButtonRightOffset, 0f, resetButtonUpOffset);
-        btn.transform.localScale    = Vector3.one * resetButtonSize;
+        btn.transform.localScale = Vector3.one * resetButtonSize;
 
         resetButtonRenderer = btn.GetComponent<Renderer>();
         // "Standard"は実機ビルドでシェーダーが含まれずnullになることがあるため、
@@ -151,6 +186,8 @@ public class RotationBurstGame : MonoBehaviour
         resetButtonRenderer.material.color = resetButtonColorIdle;
 
         resetButtonTransform = btn.transform;
+        // リングはランダムに動くので、リセットボタンは初期位置（手が届く位置）に固定する
+        btn.transform.SetParent(null, true);
     }
 
     void Update()
@@ -161,6 +198,7 @@ public class RotationBurstGame : MonoBehaviour
         if (state == GameState.Cleared)
         {
             if (Time.time >= flashUntil) SetColor(colorClear);
+            if (Time.time >= nextSpawnTime) SpawnNextRing();
             UpdateStatusText();
             return;
         }
@@ -248,7 +286,7 @@ public class RotationBurstGame : MonoBehaviour
 
                     if (burstCount >= requiredBursts)
                     {
-                        state = GameState.Cleared;
+                        OnRingCleared();
                         flashUntil = Time.time + 0.3f;
                     }
                 }
@@ -313,9 +351,21 @@ public class RotationBurstGame : MonoBehaviour
         }
     }
 
-    void ResetGame()
+void ResetGame()
     {
+        // 初期位置のリングに戻し、スコアも0に戻す
+        score = 0;
+        transform.SetPositionAndRotation(initialPos, initialRot);
+        lastCenter = initialPos;
+        UpdateLinePositions();
+        ResetRingProgress();
         state = GameState.Waiting;
+        SetColor(colorNormal);
+        UpdateStatusText();
+    }
+
+void ResetRingProgress()
+    {
         lastAngle = float.NaN;
         cumulativeAngle = 0f;
         rotationsCounted = 0;
@@ -324,9 +374,83 @@ public class RotationBurstGame : MonoBehaviour
         burstQualifiedLastFrame = false;
         burstCount = 0;
         flashUntil = -1f;
-        SetColor(colorNormal);
-        UpdateStatusText();
     }
+
+    void OnRingCleared()
+    {
+        score++;
+        if (score > bestScore) bestScore = score;
+        state = GameState.Cleared;
+        flashUntil = Time.time + 0.3f;
+        nextSpawnTime = Time.time + nextRingDelay;
+    }
+
+    void SpawnNextRing()
+    {
+        Vector3 center;
+        Quaternion rot;
+        ChooseSpawnPose(out center, out rot);
+
+        transform.SetPositionAndRotation(center, rot);
+        lastCenter = center;
+        UpdateLinePositions();
+        ResetRingProgress();
+        SetColor(colorNormal);
+
+        if (timerStartsOnSpawn)
+        {
+            state = GameState.Playing;
+            sessionStartTime = Time.time;
+        }
+        else
+        {
+            state = GameState.Waiting;
+        }
+    }
+
+    /// <summary>
+    /// 肩を中心に、手の届く範囲（前方）からランダムにリング位置を選ぶ。
+    /// リングは常にプレイヤー側を向ける（ローカルYが法線＝頭の方向、ローカルZが上方向）。
+    /// </summary>
+void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
+    {
+        // 奥行き（リングの法線方向）と向きは初期のまま固定し、リング平面内の上下左右だけ動かす
+        rot = initialRot;
+        center = initialPos;
+
+        Transform head = headTransform;
+        if (head == null && Camera.main != null) head = Camera.main.transform;
+
+        float avoidReset = ringRadius + thicknesHalf + resetButtonRadius + 0.05f;
+        float maxFromShoulder = reachRadius - ringRadius - thicknesHalf;
+
+        bool hasShoulder = head != null;
+        Vector3 shoulder = Vector3.zero;
+        if (hasShoulder)
+        {
+            Quaternion headYaw = Quaternion.Euler(0f, head.eulerAngles.y, 0f);
+            shoulder = head.position + headYaw * new Vector3(shoulderOffsetRight, -shoulderOffsetDown, 0f);
+        }
+
+        for (int i = 0; i < 30; i++)
+        {
+            float x = Random.Range(-spawnRangeRight, spawnRangeRight);
+            float z = Random.Range(-spawnRangeUp, spawnRangeUp);
+            Vector3 c = initialPos + initialRot * new Vector3(x, 0f, z);
+            center = c;
+            if (!IsValidSpawn(c, avoidReset)) continue;
+            if (hasShoulder && Vector3.Distance(c, shoulder) > maxFromShoulder) continue;
+            break;
+        }
+    }
+
+    bool IsValidSpawn(Vector3 c, float avoidReset)
+    {
+        if (Vector3.Distance(c, lastCenter) < minSpawnSeparation) return false;
+        if (resetButtonTransform != null && Vector3.Distance(c, resetButtonTransform.position) < avoidReset) return false;
+        return true;
+    }
+
 
     void PlaySparkle()
     {
@@ -351,7 +475,7 @@ public class RotationBurstGame : MonoBehaviour
     {
         if (lr == null) return;
         lr.startColor = c;
-        lr.endColor   = c;
+        lr.endColor = c;
     }
 
     void CreateStatusText()
@@ -371,22 +495,22 @@ public class RotationBurstGame : MonoBehaviour
         textGO.transform.SetParent(targetCanvas.transform, false);
 
         RectTransform rt = textGO.AddComponent<RectTransform>();
-        rt.anchorMin        = new Vector2(0.5f, 0.5f);
-        rt.anchorMax        = new Vector2(0.5f, 0.5f);
-        rt.pivot            = new Vector2(0.5f, 0.5f);
+        rt.anchorMin = new Vector2(0.5f, 0.5f);
+        rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
         rt.anchoredPosition = new Vector2(textLocalX, textLocalY);
-        rt.sizeDelta        = new Vector2(700f, 250f);
+        rt.sizeDelta = new Vector2(700f, 250f);
 
         uiText = textGO.AddComponent<Text>();
-        uiText.font      = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        uiText.fontSize  = textFontSize;
+        uiText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        uiText.fontSize = textFontSize;
         uiText.alignment = TextAnchor.MiddleCenter;
-        uiText.color     = Color.white;
+        uiText.color = Color.white;
         uiText.fontStyle = FontStyle.Bold;
-        uiText.text      = "";
+        uiText.text = "";
     }
 
-    void UpdateStatusText()
+void UpdateStatusText()
     {
         if (uiText == null) return;
 
@@ -394,38 +518,29 @@ public class RotationBurstGame : MonoBehaviour
         {
             case GameState.Waiting:
                 uiText.color = Color.white;
-                if (dbgHasTip)
-                {
-                    uiText.text = string.Format(
-                        "リングをなぞって開始\n(1秒間に{0}回転を{1}回で成功)\n\n[デバッグ] 奥行きズレ:{2:F3}m(許容{3:F3})\nリングまでの距離:{4:F3}m(許容{5:F3})",
-                        rotationsPerBurst, requiredBursts, dbgLocalY, depthTolerance, dbgDistFromRing, thicknesHalf);
-                }
-                else
-                {
-                    uiText.text = string.Format(
-                        "リングをなぞって開始\n(1秒間に{0}回転を{1}回で成功)",
-                        rotationsPerBurst, requiredBursts);
-                }
+                uiText.text = string.Format(
+                    "リングをなぞって開始\n({0}秒以内に、1秒間に{1}回転を{2}回)\nスコア: {3}",
+                    sessionTimeLimit, rotationsPerBurst, requiredBursts, score);
                 break;
 
             case GameState.Playing:
                 float remaining = Mathf.Max(0f, sessionTimeLimit - (Time.time - sessionStartTime));
                 uiText.color = Color.white;
-                uiText.text  = string.Format(
-                    "残り {0:F1}秒\nバースト: {1} / {2}",
-                    remaining, burstCount, requiredBursts);
+                uiText.text = string.Format(
+                    "残り {0:F1}秒   スコア: {3}\nバースト: {1} / {2}",
+                    remaining, burstCount, requiredBursts, score);
                 break;
 
             case GameState.Cleared:
                 uiText.color = colorClear;
-                uiText.text  = "クリア！\nリセットボタンに2秒触れてリトライ";
+                uiText.text = string.Format("クリア！\nスコア: {0}", score);
                 break;
 
             case GameState.Failed:
                 uiText.color = colorFail;
-                uiText.text  = string.Format(
-                    "失敗… (バースト {0} / {1})\nリセットボタンに2秒触れてリトライ",
-                    burstCount, requiredBursts);
+                uiText.text = string.Format(
+                    "ゲームオーバー\nスコア: {0}（ベスト {1}）\nリセットボタンに{2}秒触れてリトライ",
+                    score, bestScore, resetHoldSeconds);
                 break;
         }
     }

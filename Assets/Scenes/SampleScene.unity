@@ -536,17 +536,32 @@ MonoBehaviour:
   ringRadius: 0.15
   segments: 64
   thicknesHalf: 0.07
-  depthTolerance: 0.05
+  depthTolerance: 0.08
   sessionTimeLimit: 7
   burstWindowSeconds: 1
   rotationsPerBurst: 4
   requiredBursts: 3
-  retryKey: 114
+  resetButtonRightOffset: 0.25
+  resetButtonUpOffset: 0.22
+  resetButtonSize: 0.12
+  resetButtonRadius: 0.09
+  resetHoldSeconds: 2
   textLocalX: 0
-  textLocalY: -80
+  textLocalY: 0
   textFontSize: 36
   tipTransform: {fileID: 234781393}
   sparkleClip: {fileID: 0}
+  headTransform: {fileID: 0}
+  shoulderOffsetRight: 0.15
+  shoulderOffsetDown: 0.2
+  reachRadius: 0.7
+  minCenterDistance: 0.25
+  spawnYawRange: 60
+  spawnPitchMin: -30
+  spawnPitchMax: 35
+  minSpawnSeparation: 0.2
+  nextRingDelay: 1
+  timerStartsOnSpawn: 1
 --- !u!1 &883267041
 GameObject:
   m_ObjectHideFlags: 0
@@ -691,7 +706,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_Material: {fileID: 0}
-  m_Color: {r: 0.15045391, g: 0.6509434, b: 0.1991487, a: 1}
+  m_Color: {r: 0.9056604, g: 0.13243146, b: 0.38995665, a: 1}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -711,7 +726,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: Yui Endo 2026/07/14
+  m_Text: Yui Endo 2026/09/27
 --- !u!222 &1108381499
 CanvasRenderer:
   m_ObjectHideFlags: 0
