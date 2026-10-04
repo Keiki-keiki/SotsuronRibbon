@@ -514,13 +514,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 827056170}
   serializedVersion: 2
-  m_LocalRotation: {x: -0.46174863, y: 0, z: 0, w: 0.8870109}
+  m_LocalRotation: {x: -0.42261827, y: 0, z: 0, w: 0.9063079}
   m_LocalPosition: {x: 0, y: 0.7, z: 0.8}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: -55, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: -50, y: 0, z: 0}
 --- !u!114 &827056173
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -535,6 +535,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   ringRadius: 0.15
   segments: 64
+  ringAlpha: 0.3
   thicknesHalf: 0.07
   depthTolerance: 0.08
   sessionTimeLimit: 7
@@ -555,13 +556,16 @@ MonoBehaviour:
   shoulderOffsetRight: 0.15
   shoulderOffsetDown: 0.2
   reachRadius: 0.7
-  minCenterDistance: 0.25
-  spawnYawRange: 60
-  spawnPitchMin: -30
-  spawnPitchMax: 35
+  spawnRangeRight: 0.3
+  spawnRangeUp: 0.45
+  spawnRangeDown: 0.25
   minSpawnSeparation: 0.2
   nextRingDelay: 1
   timerStartsOnSpawn: 1
+  tonboPrefab: {fileID: 3906286559221720163, guid: 6620a52194bc345fca5fed846483d8aa, type: 3}
+  tonboScale: 0.08
+  tonboStartDistance: 2
+  tonboWobble: 0.04
 --- !u!1 &883267041
 GameObject:
   m_ObjectHideFlags: 0

@@ -28,6 +28,9 @@ public class RotationBurstGame : MonoBehaviour
     [Header("円の設定")]
     public float ringRadius = 0.15f;
     public int segments = 64;
+    [Tooltip("円の不透明度（0=完全に透明、1=不透明）。小さいほど奥のトンボが見やすい")]
+    [Range(0f, 1f)]
+    public float ringAlpha = 0.3f;
 
     [Header("なぞり判定設定（この範囲内にいる間だけ回転をカウントする）")]
     public float thicknesHalf = 0.07f;
@@ -76,8 +79,10 @@ public class RotationBurstGame : MonoBehaviour
     
     [Tooltip("初期位置を中心に、左右（リング平面のローカルX）へ動かす最大距離（メートル）")]
     public float spawnRangeRight = 0.3f;
-    [Tooltip("初期位置を中心に、上下（リング平面のローカルZ）へ動かす最大距離（メートル）")]
-    public float spawnRangeUp = 0.25f;
+    [Tooltip("初期位置を中心に、上方向（リング平面のローカルZ+）へ動かす最大距離（メートル）")]
+    public float spawnRangeUp = 0.45f;
+    [Tooltip("初期位置を中心に、下方向（リング平面のローカルZ-）へ動かす最大距離（メートル）")]
+    public float spawnRangeDown = 0.25f;
     
     
     [Tooltip("前回のリング中心から最低これだけ離す（メートル）")]
@@ -86,6 +91,16 @@ public class RotationBurstGame : MonoBehaviour
     public float nextRingDelay = 1f;
     [Tooltip("true: リング出現と同時に制限時間スタート / false: なぞり始めてからスタート")]
     public bool timerStartsOnSpawn = true;
+
+    [Header("トンボ演出")]
+    [Tooltip("円に迫ってくるトンボのPrefab（Assets/Tonbo/Tonbo.prefab）")]
+    public GameObject tonboPrefab;
+    [Tooltip("トンボの大きさ（元モデルは翼を広げて約3.9mなので、0.08で約0.3m）")]
+    public float tonboScale = 0.08f;
+    [Tooltip("円の奥（プレイヤーと反対側）にどれだけ離れた位置から飛んでくるか（メートル）")]
+    public float tonboStartDistance = 2.0f;
+    [Tooltip("飛んでくる途中の上下左右のゆらぎの大きさ（メートル）")]
+    public float tonboWobble = 0.04f;
 
     private LineRenderer lr;
     private AudioSource audioSource;
@@ -125,6 +140,12 @@ public class RotationBurstGame : MonoBehaviour
     private Vector3 initialPos;
     private Quaternion initialRot;
     private Vector3 lastCenter;
+
+    // トンボ
+    private GameObject tonboInstance;
+    private bool tonboRunning = false;
+    private Vector3 tonboStart;
+    private Vector3 tonboEnd;
 
     // デバッグ表示用（原因切り分け後に削除してよい）
     private float dbgLocalY = 0f;
@@ -194,6 +215,7 @@ public class RotationBurstGame : MonoBehaviour
     {
         // リセットボタンは状態に関係なく常にチェックする（いつでも強制リセット可能）
         HandleResetButton();
+        UpdateTonbo();
 
         if (state == GameState.Cleared)
         {
@@ -355,6 +377,7 @@ void ResetGame()
     {
         // 初期位置のリングに戻し、スコアも0に戻す
         score = 0;
+        HideTonbo();
         transform.SetPositionAndRotation(initialPos, initialRot);
         lastCenter = initialPos;
         UpdateLinePositions();
@@ -379,11 +402,80 @@ void ResetRingProgress()
     void OnRingCleared()
     {
         score++;
+        HideTonbo();
         if (score > bestScore) bestScore = score;
         state = GameState.Cleared;
         flashUntil = Time.time + 0.3f;
         nextSpawnTime = Time.time + nextRingDelay;
     }
+
+void StartTonbo()
+    {
+        if (tonboPrefab == null) return;
+
+        // プレイヤー側の向き（リングの法線のうち頭がある側）を求める
+        Transform head = headTransform;
+        if (head == null && Camera.main != null) head = Camera.main.transform;
+        // 円の角度（左右でY軸回転する）には依存せず、最初のリングの向きを基準にした固定方向にする
+        Vector3 normal = initialRot * Vector3.up;
+        Vector3 toPlayer = normal;
+        if (head != null && Vector3.Dot(head.position - initialPos, normal) < 0f) toPlayer = -normal;
+
+        // 円の奥（プレイヤーと反対側）から円の中心へ向かって飛んでくる
+        // 水平方向だけにして、真っ直ぐ（上下に傾かず）飛んでくるようにする
+        Vector3 flat = Vector3.ProjectOnPlane(toPlayer, Vector3.up);
+        if (flat.sqrMagnitude > 0.01f) toPlayer = flat.normalized;
+
+        // 位置の座標だけ円の中心に合わせる
+        tonboEnd = transform.position;
+        tonboStart = tonboEnd - toPlayer * tonboStartDistance;
+
+        if (tonboInstance == null)
+        {
+            tonboInstance = Instantiate(tonboPrefab);
+            tonboInstance.name = "TonboRuntime";
+        }
+        tonboInstance.transform.localScale = Vector3.one * tonboScale;
+        tonboInstance.transform.SetPositionAndRotation(tonboStart, Quaternion.LookRotation(toPlayer, Vector3.up));
+        tonboInstance.SetActive(true);
+        tonboRunning = true;
+    }
+
+    void HideTonbo()
+    {
+        tonboRunning = false;
+        if (tonboInstance != null) tonboInstance.SetActive(false);
+    }
+
+    void UpdateTonbo()
+    {
+        if (tonboPrefab == null) return;
+
+        if (state == GameState.Playing && !tonboRunning && !float.IsNaN(sessionStartTime))
+        {
+            StartTonbo();
+        }
+        if (!tonboRunning || tonboInstance == null) return;
+
+        if (state == GameState.Playing && !float.IsNaN(sessionStartTime))
+        {
+            // 制限時間いっぱいかけて円の中心に到達する
+            float t = Mathf.Clamp01((Time.time - sessionStartTime) / sessionTimeLimit);
+            Vector3 dir = (tonboEnd - tonboStart).normalized;
+            Vector3 side = Vector3.Cross(dir, Vector3.up).normalized;
+            float w = tonboWobble * (1f - t);
+            Vector3 pos = Vector3.Lerp(tonboStart, tonboEnd, t)
+                        + side * Mathf.Sin(Time.time * 4f) * w
+                        + Vector3.up * Mathf.Sin(Time.time * 5.3f) * w;
+            tonboInstance.transform.SetPositionAndRotation(pos, Quaternion.LookRotation(dir, Vector3.up));
+        }
+        else if (state == GameState.Failed)
+        {
+            // ゲームオーバー時は円の中心に止まる
+            tonboInstance.transform.position = tonboEnd;
+        }
+    }
+
 
     void SpawnNextRing()
     {
@@ -414,19 +506,24 @@ void ResetRingProgress()
     /// </summary>
 void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
     {
-        // 奥行き（リングの法線方向）と向きは初期のまま固定し、リング平面内の上下左右だけ動かす
+        // プレイヤー（頭）を中心にした円弧上で左右に動かし、左右位置に応じてリングをY軸回転させる。
+        // 距離（奥行き）は初期位置のまま、リングは常にプレイヤーの方を向く。
         rot = initialRot;
         center = initialPos;
 
         Transform head = headTransform;
         if (head == null && Camera.main != null) head = Camera.main.transform;
+        bool hasHead = head != null;
+
+        Vector3 pivot = hasHead ? new Vector3(head.position.x, initialPos.y, head.position.z) : initialPos;
+        Vector3 toRing = initialPos - pivot;
+        float r = new Vector2(toRing.x, toRing.z).magnitude;
 
         float avoidReset = ringRadius + thicknesHalf + resetButtonRadius + 0.05f;
         float maxFromShoulder = reachRadius - ringRadius - thicknesHalf;
 
-        bool hasShoulder = head != null;
         Vector3 shoulder = Vector3.zero;
-        if (hasShoulder)
+        if (hasHead)
         {
             Quaternion headYaw = Quaternion.Euler(0f, head.eulerAngles.y, 0f);
             shoulder = head.position + headYaw * new Vector3(shoulderOffsetRight, -shoulderOffsetDown, 0f);
@@ -435,11 +532,27 @@ void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
         for (int i = 0; i < 30; i++)
         {
             float x = Random.Range(-spawnRangeRight, spawnRangeRight);
-            float z = Random.Range(-spawnRangeUp, spawnRangeUp);
-            Vector3 c = initialPos + initialRot * new Vector3(x, 0f, z);
+            float z = Random.Range(-spawnRangeDown, spawnRangeUp);
+
+            Vector3 c;
+            Quaternion yawRot = Quaternion.identity;
+            if (hasHead && r > 0.05f)
+            {
+                // 左右の移動量(x)を円弧の長さとみなして角度に変換
+                float thetaDeg = (x / r) * Mathf.Rad2Deg;
+                yawRot = Quaternion.Euler(0f, thetaDeg, 0f);
+                c = pivot + yawRot * (toRing + initialRot * new Vector3(0f, 0f, z));
+            }
+            else
+            {
+                c = initialPos + initialRot * new Vector3(x, 0f, z);
+            }
+
             center = c;
+            rot = yawRot * initialRot;
+
             if (!IsValidSpawn(c, avoidReset)) continue;
-            if (hasShoulder && Vector3.Distance(c, shoulder) > maxFromShoulder) continue;
+            if (hasHead && Vector3.Distance(c, shoulder) > maxFromShoulder) continue;
             break;
         }
     }
@@ -471,9 +584,10 @@ void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
         }
     }
 
-    void SetColor(Color c)
+void SetColor(Color c)
     {
         if (lr == null) return;
+        c.a = ringAlpha;
         lr.startColor = c;
         lr.endColor = c;
     }
