@@ -101,6 +101,17 @@ public class RotationBurstGame : MonoBehaviour
     public float tonboStartDistance = 2.0f;
     [Tooltip("飛んでくる途中の上下左右のゆらぎの大きさ（メートル）")]
     public float tonboWobble = 0.04f;
+    [Tooltip("トンボの色がランダムになる確率（0.001 = 0.1%）。トンボが出現するたびに抽選")]
+    [Range(0f, 1f)]
+    public float tonboRandomColorChance = 0.001f;
+    [Tooltip("デバッグ用：trueにすると毎回ランダム色になる（確認後はfalseに戻すこと）")]
+    public bool tonboForceRandomColor = false;
+    [Tooltip("大きさのばらつき（対数正規分布のσ）。0で全部同じ大きさ。0.25なら約68%が×0.78〜×1.28、約95%が×0.61〜×1.65")]
+    public float tonboSizeSigma = 0.25f;
+    [Tooltip("大きさの倍率の下限（極端に小さくなりすぎないように）")]
+    public float tonboSizeMinMultiplier = 0.4f;
+    [Tooltip("大きさの倍率の上限（極端に大きくなりすぎないように）")]
+    public float tonboSizeMaxMultiplier = 2.5f;
 
     private LineRenderer lr;
     private AudioSource audioSource;
@@ -146,6 +157,9 @@ public class RotationBurstGame : MonoBehaviour
     private bool tonboRunning = false;
     private Vector3 tonboStart;
     private Vector3 tonboEnd;
+    private Renderer[] tonboRenderers;
+    private Material[][] tonboOriginalMats;
+    private readonly List<Material> tonboTempMats = new List<Material>();
 
     // デバッグ表示用（原因切り分け後に削除してよい）
     private float dbgLocalY = 0f;
@@ -435,8 +449,12 @@ void StartTonbo()
             tonboInstance = Instantiate(tonboPrefab);
             tonboInstance.name = "TonboRuntime";
         }
-        tonboInstance.transform.localScale = Vector3.one * tonboScale;
+        // 大きさは対数正規分布：倍率 = exp(N(0, σ))。普通の大きさ(×1)が最も多く、低確率で大小に振れる
+        float sizeMul = Mathf.Exp(RandomGaussian() * tonboSizeSigma);
+        sizeMul = Mathf.Clamp(sizeMul, tonboSizeMinMultiplier, tonboSizeMaxMultiplier);
+        tonboInstance.transform.localScale = Vector3.one * (tonboScale * sizeMul);
         tonboInstance.transform.SetPositionAndRotation(tonboStart, Quaternion.LookRotation(toPlayer, Vector3.up));
+        ApplyTonboColors();
         tonboInstance.SetActive(true);
         tonboRunning = true;
     }
@@ -446,6 +464,69 @@ void StartTonbo()
         tonboRunning = false;
         if (tonboInstance != null) tonboInstance.SetActive(false);
     }
+
+/// <summary>標準正規分布 N(0,1) に従う乱数（Box-Muller法）</summary>
+    float RandomGaussian()
+    {
+        float u1 = Mathf.Max(Random.value, 1e-6f);
+        float u2 = Random.value;
+        return Mathf.Sqrt(-2f * Mathf.Log(u1)) * Mathf.Cos(2f * Mathf.PI * u2);
+    }
+
+
+/// <summary>
+    /// トンボが出現するたびに抽選し、当たったら色をランダムにする（外れたら元の色に戻す）。
+    /// 元のマテリアルが同じ部分（両目・足・腹部・頭と胸など）は同じ色に統一される。
+    /// Prefab側のマテリアルは書き換えず、実行時にコピーを作って差し替える。
+    /// </summary>
+    void ApplyTonboColors()
+    {
+        if (tonboInstance == null) return;
+
+        if (tonboRenderers == null)
+        {
+            tonboRenderers = tonboInstance.GetComponentsInChildren<Renderer>(true);
+            tonboOriginalMats = new Material[tonboRenderers.Length][];
+            for (int i = 0; i < tonboRenderers.Length; i++)
+                tonboOriginalMats[i] = tonboRenderers[i].sharedMaterials;
+        }
+
+        // 前回のランダム色マテリアルを破棄し、まず元の色に戻す
+        for (int i = 0; i < tonboRenderers.Length; i++)
+            tonboRenderers[i].sharedMaterials = tonboOriginalMats[i];
+        foreach (var m in tonboTempMats) if (m != null) Destroy(m);
+        tonboTempMats.Clear();
+
+        if (!tonboForceRandomColor && Random.value >= tonboRandomColorChance) return;
+
+        // 元のマテリアルごとに1色だけ決める（同じマテリアル＝同じ色の部分は統一）
+        var colorMap = new Dictionary<Material, Material>();
+        for (int i = 0; i < tonboRenderers.Length; i++)
+        {
+            Material[] src = tonboOriginalMats[i];
+            Material[] dst = new Material[src.Length];
+            for (int j = 0; j < src.Length; j++)
+            {
+                Material orig = src[j];
+                if (orig == null) { dst[j] = null; continue; }
+
+                Material tinted;
+                if (!colorMap.TryGetValue(orig, out tinted))
+                {
+                    tinted = new Material(orig);
+                    Color c = Color.HSVToRGB(Random.value, Random.Range(0.6f, 1f), Random.Range(0.75f, 1f));
+                    // 羽などの半透明マテリアルは元のアルファを保つ
+                    if (tinted.HasProperty("_Color")) { c.a = tinted.color.a; tinted.color = c; }
+                    else if (tinted.HasProperty("_BaseColor")) { c.a = tinted.GetColor("_BaseColor").a; tinted.SetColor("_BaseColor", c); }
+                    colorMap[orig] = tinted;
+                    tonboTempMats.Add(tinted);
+                }
+                dst[j] = tinted;
+            }
+            tonboRenderers[i].sharedMaterials = dst;
+        }
+    }
+
 
     void UpdateTonbo()
     {

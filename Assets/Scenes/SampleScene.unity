@@ -566,6 +566,8 @@ MonoBehaviour:
   tonboScale: 0.08
   tonboStartDistance: 2
   tonboWobble: 0.04
+  tonboRandomColorChance: 0.01
+  tonboForceRandomColor: 0
 --- !u!1 &883267041
 GameObject:
   m_ObjectHideFlags: 0
