@@ -46,7 +46,7 @@ public class RotationBurstGame : MonoBehaviour
     [Tooltip("クリアに必要なバースト達成回数")]
     public int requiredBursts = 3;
 
-    [Header("リセットボタン（棒の先端でresetHoldSeconds秒触れると、いつでも強制リセット）")]
+    [Header("メニューボタン（棒の先端でresetHoldSeconds秒触れると、いつでもメニュー画面に戻る）")]
     [Tooltip("ボタンの位置：リング中心からローカルX（右方向）にどれだけ離すか（メートル）")]
     public float resetButtonRightOffset = 0.25f;
     [Tooltip("ボタンの位置：リング中心からローカルZ（上方向）にどれだけ離すか（メートル）")]
@@ -57,6 +57,42 @@ public class RotationBurstGame : MonoBehaviour
     public float resetButtonRadius = 0.09f;
     [Tooltip("この秒数だけ触れ続けたらリセットする")]
     public float resetHoldSeconds = 2f;
+
+    [Header("オープニング画面 / スタートボタン（球に触れ続けるとゲーム開始）")]
+    [Tooltip("オープニング画面に表示するタイトル")]
+    public string gameTitle = "リングゲーム";
+    [Tooltip("スタートボタンの位置：最初のリング中心からのローカルオフセット（X=右, Y=奥行き, Z=上）")]
+    public Vector3 startButtonLocalOffset = Vector3.zero;
+    [Tooltip("スタートボタンの見た目のサイズ（直径、メートル）")]
+    public float startButtonSize = 0.12f;
+    [Tooltip("スタートボタンの判定半径（この距離以内なら触れているとみなす）")]
+    public float startButtonRadius = 0.09f;
+    [Tooltip("この秒数だけ触れ続けたらゲーム開始")]
+    public float startHoldSeconds = 2f;
+
+    [Header("記録（オープニング画面に表示。PlayerPrefsに保存され、アプリを閉じても残る）")]
+    [Tooltip("トンボの実寸の目安：Prefabの倍率1あたりの翼長（メートル）。元モデルは約3.9m")]
+    public float tonboModelSpanMeters = 3.9f;
+    [Tooltip("保存する色違いの最大種類数（超えたら古いものから消える）")]
+    public int maxStoredVariants = 10;
+    [Tooltip("記録画面：捕まえたトンボ一覧（右側）の中心位置。最初のリング中心からのローカルオフセット（X=右, Y=奥行き, Z=上）")]
+    public Vector3 recordsGalleryLocalOffset = new Vector3(0.3f, 0f, 0.05f);
+    [Tooltip("記録画面：トンボ一覧の列数（超えたら下の段に折り返す）")]
+    public int galleryColumns = 3;
+    [Tooltip("記録画面：文字（左側）の横位置（Canvas上の座標。0が中央、マイナスで左）")]
+    public float recordsTextLocalX = -300f;
+    [Tooltip("記録画面：文字の幅（Canvas上の座標。一覧と重ならないよう狭める）")]
+    public float recordsTextWidth = 450f;
+    [Tooltip("一覧のトンボ同士の間隔（メートル）")]
+    public float gallerySpacing = 0.09f;
+    [Tooltip("一覧のトンボの大きさ（Prefab倍率）")]
+    public float galleryTonboScale = 0.02f;
+
+    [Header("メニューボタン配置（スタート=左 / 記録=右）")]
+    [Tooltip("スタートボタンと記録ボタンの間隔（メートル）。startButtonLocalOffsetを中心に左右へ半分ずつ離れる")]
+    public float menuButtonGap = 0.3f;
+    [Tooltip("記録画面の「もどる」ボタンの位置：startButtonLocalOffsetからの追加オフセット")]
+    public Vector3 backButtonLocalOffset = Vector3.zero;
 
     [Header("表示設定")]
     public float textLocalX = 0f;
@@ -127,8 +163,8 @@ public class RotationBurstGame : MonoBehaviour
     private static readonly Color resetButtonColorIdle = new Color(0.5f, 0.5f, 0.5f); // 未接触
     private static readonly Color resetButtonColorHeld = new Color(1f, 0.2f, 0.2f);   // 押し込み中〜リセット直前
 
-    private enum GameState { Waiting, Playing, Cleared, Failed }
-    private GameState state = GameState.Waiting;
+    private enum GameState { Title, Records, Waiting, Playing, Cleared, Failed }
+    private GameState state = GameState.Title;
 
     private float lastAngle = float.NaN;
     private float cumulativeAngle = 0f;
@@ -143,6 +179,72 @@ public class RotationBurstGame : MonoBehaviour
     private Transform resetButtonTransform;
     private Renderer resetButtonRenderer;
     private float resetHoldTimer = 0f;
+
+    // スタートボタン関連
+    private Transform startButtonTransform;
+    private Renderer startButtonRenderer;
+    private float startHoldTimer = 0f;
+
+    // 記録関連
+    private const string KeyCount = "Tonbo_Count";
+    private const string KeyNormal = "Tonbo_NormalCount";
+    private const string KeyMax = "Tonbo_MaxSize";
+    private const string KeyMin = "Tonbo_MinSize";
+    private const string KeyVariants = "Tonbo_Variants";
+    private float currentTonboScale = 0f;
+    private readonly List<Color> currentVariantColors = new List<Color>();
+    private GameObject galleryRoot;
+    private HoldButton recordButton;
+    private HoldButton backButton;
+
+    /// <summary>球に触れ続けると押せるシンプルなボタン（記録ボタン・もどるボタン用）</summary>
+    private class HoldButton
+    {
+        public Transform t;
+        private Renderer r;
+        private float timer;
+        private Color idle, held;
+
+        public HoldButton(string name, Vector3 pos, float size, Color idle, Color held)
+        {
+            this.idle = idle;
+            this.held = held;
+            GameObject go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            go.name = name;
+            Object.Destroy(go.GetComponent<SphereCollider>());
+            go.transform.position = pos;
+            go.transform.localScale = Vector3.one * size;
+            r = go.GetComponent<Renderer>();
+            r.material = new Material(Shader.Find("Sprites/Default"));
+            r.material.color = idle;
+            t = go.transform;
+        }
+
+        public void SetActive(bool active)
+        {
+            timer = 0f;
+            if (r != null) r.material.color = idle;
+            if (t != null) t.gameObject.SetActive(active);
+        }
+
+        /// <summary>毎フレーム呼ぶ。holdSeconds秒触れ続けたらtrueを返す</summary>
+        public bool Tick(Transform tip, float radius, float holdSeconds)
+        {
+            if (t == null) return false;
+            bool touching = tip != null && Vector3.Distance(tip.position, t.position) <= radius;
+            timer = touching ? timer + Time.deltaTime : Mathf.Max(0f, timer - Time.deltaTime * 2f);
+            r.material.color = Color.Lerp(idle, held, Mathf.Clamp01(timer / holdSeconds));
+            if (timer >= holdSeconds)
+            {
+                timer = 0f;
+                return true;
+            }
+            return false;
+        }
+    }
+    private readonly List<Material> galleryMats = new List<Material>();
+    private static readonly Color startButtonColorIdle = new Color(0.2f, 0.6f, 0.3f);
+    private static readonly Color startButtonColorHeld = new Color(0.4f, 1f, 0.5f);
 
     // ランダム出現・スコア関連
     private int score = 0;
@@ -201,6 +303,17 @@ public class RotationBurstGame : MonoBehaviour
         {
             Debug.LogError("[RotationBurstGame] CreateResetButton failed: " + e);
         }
+
+        try
+        {
+            CreateStartButton();
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError("[RotationBurstGame] CreateStartButton failed: " + e);
+        }
+
+        EnterTitle();
     }
 
     void CreateResetButton()
@@ -225,9 +338,305 @@ public class RotationBurstGame : MonoBehaviour
         btn.transform.SetParent(null, true);
     }
 
+void CreateStartButton()
+    {
+        GameObject btn = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        btn.name = "StartButton_" + gameObject.name;
+        Destroy(btn.GetComponent<SphereCollider>());
+        btn.transform.position = MenuButtonPos(-0.5f);
+        btn.transform.localScale = Vector3.one * startButtonSize;
+
+        startButtonRenderer = btn.GetComponent<Renderer>();
+        startButtonRenderer.material = new Material(Shader.Find("Sprites/Default"));
+        startButtonRenderer.material.color = startButtonColorIdle;
+
+        startButtonTransform = btn.transform;
+
+        recordButton = new HoldButton("RecordButton_" + gameObject.name, MenuButtonPos(0.5f), startButtonSize,
+            new Color(0.2f, 0.4f, 0.8f), new Color(0.4f, 0.7f, 1f));
+        backButton = new HoldButton("BackButton_" + gameObject.name,
+            initialPos + initialRot * (startButtonLocalOffset + backButtonLocalOffset), startButtonSize,
+            new Color(0.5f, 0.5f, 0.5f), new Color(1f, 1f, 1f));
+        backButton.SetActive(false);
+    }
+
+    /// <summary>オープニング画面に入る：リングとリセットボタンを隠し、スタートボタンを表示する</summary>
+    void EnterTitle()
+    {
+        state = GameState.Title;
+        startHoldTimer = 0f;
+        if (lr != null) lr.enabled = false;
+        if (galleryRoot != null) galleryRoot.SetActive(false);
+        if (recordButton != null) recordButton.SetActive(true);
+        SetTextLayout(false);
+        if (backButton != null) backButton.SetActive(false);
+        if (resetButtonTransform != null) resetButtonTransform.gameObject.SetActive(false);
+        if (startButtonTransform != null) startButtonTransform.gameObject.SetActive(true);
+        UpdateStatusText();
+    }
+
+    /// <summary>スタートボタンにstartHoldSeconds秒触れ続けたらゲーム開始</summary>
+    void HandleStartButton()
+    {
+        if (startButtonTransform == null)
+        {
+            // ボタンが生成できなかった場合でもゲームが進められるようにする
+            StartGame();
+            return;
+        }
+
+        bool touching = false;
+        if (tipTransform != null)
+        {
+            float dist = Vector3.Distance(tipTransform.position, startButtonTransform.position);
+            touching = dist <= startButtonRadius;
+        }
+
+        if (touching) startHoldTimer += Time.deltaTime;
+        else startHoldTimer = Mathf.Max(0f, startHoldTimer - Time.deltaTime * 2f);
+
+        if (startButtonRenderer != null)
+        {
+            float progress = Mathf.Clamp01(startHoldTimer / startHoldSeconds);
+            startButtonRenderer.material.color = Color.Lerp(startButtonColorIdle, startButtonColorHeld, progress);
+        }
+
+        if (startHoldTimer >= startHoldSeconds)
+        {
+            startHoldTimer = 0f;
+            StartGame();
+        }
+    }
+
+    void StartGame()
+    {
+        if (startButtonTransform != null) startButtonTransform.gameObject.SetActive(false);
+        if (resetButtonTransform != null) resetButtonTransform.gameObject.SetActive(true);
+        if (lr != null) lr.enabled = true;
+        if (galleryRoot != null) galleryRoot.SetActive(false);
+        if (recordButton != null) recordButton.SetActive(false);
+        if (backButton != null) backButton.SetActive(false);
+        score = 0;
+        ResetRingProgress();
+        state = GameState.Waiting;
+        SetColor(colorNormal);
+        UpdateStatusText();
+    }
+
+/// <summary>メニューボタンの位置。side=-0.5でスタート（左）、+0.5で記録（右）</summary>
+    Vector3 MenuButtonPos(float side)
+    {
+        return initialPos + initialRot * (startButtonLocalOffset + new Vector3(menuButtonGap * side, 0f, 0f));
+    }
+
+    /// <summary>記録画面に入る：メニューボタンを隠し、捕まえたトンボ一覧と「もどる」ボタンを出す</summary>
+    void EnterRecords()
+    {
+        state = GameState.Records;
+        startHoldTimer = 0f;
+        if (startButtonTransform != null) startButtonTransform.gameObject.SetActive(false);
+        if (recordButton != null) recordButton.SetActive(false);
+        if (backButton != null) backButton.SetActive(true);
+        SetTextLayout(true);
+        BuildGallery();
+        UpdateStatusText();
+    }
+
+/// <summary>ステータステキストの配置を切り替える。記録画面では左側に寄せて幅を狭め、右側のトンボ一覧と重ならないようにする</summary>
+    void SetTextLayout(bool recordsLayout)
+    {
+        if (uiText == null) return;
+        RectTransform rt = uiText.rectTransform;
+        if (recordsLayout)
+        {
+            rt.anchoredPosition = new Vector2(recordsTextLocalX, textLocalY);
+            rt.sizeDelta = new Vector2(recordsTextWidth, 350f);
+        }
+        else
+        {
+            rt.anchoredPosition = new Vector2(textLocalX, textLocalY);
+            rt.sizeDelta = new Vector2(700f, 250f);
+        }
+    }
+
+
+
+// ===== 捕まえたトンボの記録 =====
+
+    /// <summary>円をクリアした瞬間に、今のトンボの色・大きさを記録する</summary>
+    void RecordCaught()
+    {
+        if (tonboInstance == null || !tonboRunning) return;
+
+        float size = currentTonboScale * tonboModelSpanMeters;
+        int count = PlayerPrefs.GetInt(KeyCount, 0);
+        float max = (count == 0) ? size : Mathf.Max(PlayerPrefs.GetFloat(KeyMax, size), size);
+        float min = (count == 0) ? size : Mathf.Min(PlayerPrefs.GetFloat(KeyMin, size), size);
+        PlayerPrefs.SetFloat(KeyMax, max);
+        PlayerPrefs.SetFloat(KeyMin, min);
+        PlayerPrefs.SetInt(KeyCount, count + 1);
+
+        if (currentVariantColors.Count == 0)
+        {
+            PlayerPrefs.SetInt(KeyNormal, PlayerPrefs.GetInt(KeyNormal, 0) + 1);
+        }
+        else
+        {
+            string v = EncodeVariant(currentVariantColors);
+            List<string> list = LoadVariantStrings();
+            if (!list.Contains(v))
+            {
+                list.Add(v);
+                while (list.Count > maxStoredVariants) list.RemoveAt(0);
+                PlayerPrefs.SetString(KeyVariants, string.Join(";", list.ToArray()));
+            }
+        }
+        PlayerPrefs.Save();
+    }
+
+    List<string> LoadVariantStrings()
+    {
+        var list = new List<string>();
+        string s = PlayerPrefs.GetString(KeyVariants, "");
+        if (s.Length > 0) list.AddRange(s.Split(';'));
+        return list;
+    }
+
+    string EncodeVariant(List<Color> colors)
+    {
+        var parts = new string[colors.Count];
+        for (int i = 0; i < colors.Count; i++) parts[i] = ColorUtility.ToHtmlStringRGB(colors[i]);
+        return string.Join(",", parts);
+    }
+
+    Color[] DecodeVariant(string s)
+    {
+        string[] parts = s.Split(',');
+        var colors = new Color[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            Color c;
+            colors[i] = ColorUtility.TryParseHtmlString("#" + parts[i], out c) ? c : Color.white;
+        }
+        return colors;
+    }
+
+string GetRecordText()
+    {
+        int count = PlayerPrefs.GetInt(KeyCount, 0);
+        if (count == 0) return "\n\nまだトンボを\n捕まえていません";
+        float max = PlayerPrefs.GetFloat(KeyMax, 0f) * 100f;
+        float min = PlayerPrefs.GetFloat(KeyMin, 0f) * 100f;
+        return string.Format("\n\n捕まえた数: {0}匹\n色違い: {1}種類\n最大: {2:F0}cm\n最小: {3:F0}cm",
+            count, LoadVariantStrings().Count, max, min);
+    }
+
+    /// <summary>捕まえたことのある色のトンボを、オープニング画面に小さく並べて表示する</summary>
+    void BuildGallery()
+    {
+        if (galleryRoot != null) Destroy(galleryRoot);
+        galleryRoot = null;
+        foreach (var m in galleryMats) if (m != null) Destroy(m);
+        galleryMats.Clear();
+        if (tonboPrefab == null) return;
+
+        bool normal = PlayerPrefs.GetInt(KeyNormal, 0) > 0;
+        var variants = new List<Color[]>();
+        foreach (string s in LoadVariantStrings()) variants.Add(DecodeVariant(s));
+        int total = (normal ? 1 : 0) + variants.Count;
+        if (total == 0) return;
+
+        galleryRoot = new GameObject("TonboGallery");
+        galleryRoot.transform.SetPositionAndRotation(initialPos + initialRot * recordsGalleryLocalOffset, initialRot);
+
+        int index = 0;
+        if (normal) AddGalleryModel(index++, total, null);
+        foreach (var colors in variants) AddGalleryModel(index++, total, colors);
+    }
+
+void AddGalleryModel(int index, int total, Color[] colors)
+    {
+        // 右側に格子状に並べる（galleryColumns列、超えたら下の段へ。全体は中心を基準に配置）
+        int cols = Mathf.Max(1, galleryColumns);
+        int col = index % cols;
+        int row = index / cols;
+        int colsUsed = Mathf.Min(total, cols);
+        int rows = (total + cols - 1) / cols;
+        float x = (col - (colsUsed - 1) * 0.5f) * gallerySpacing;
+        float z = ((rows - 1) * 0.5f - row) * gallerySpacing;
+
+        GameObject go = Instantiate(tonboPrefab, galleryRoot.transform);
+        go.transform.localPosition = new Vector3(x, 0f, z);
+        go.transform.localRotation = Quaternion.LookRotation(Vector3.right, Vector3.up); // 横向き（側面）で見せる
+        go.transform.localScale = Vector3.one * galleryTonboScale;
+        if (colors != null) TintModel(go, colors);
+    }
+
+    /// <summary>元のマテリアルの出現順に、保存しておいた色を割り当てる（ApplyTonboColorsと同じ対応）</summary>
+    void TintModel(GameObject go, Color[] colors)
+    {
+        Renderer[] rends = go.GetComponentsInChildren<Renderer>(true);
+        var map = new Dictionary<Material, Material>();
+        int k = 0;
+        foreach (Renderer r in rends)
+        {
+            Material[] src = r.sharedMaterials;
+            Material[] dst = new Material[src.Length];
+            for (int j = 0; j < src.Length; j++)
+            {
+                Material orig = src[j];
+                if (orig == null) { dst[j] = null; continue; }
+
+                Material tinted;
+                if (!map.TryGetValue(orig, out tinted))
+                {
+                    tinted = new Material(orig);
+                    Color c = (k < colors.Length) ? colors[k] : Color.white;
+                    k++;
+                    if (tinted.HasProperty("_Color")) { c.a = tinted.color.a; tinted.color = c; }
+                    else if (tinted.HasProperty("_BaseColor")) { c.a = tinted.GetColor("_BaseColor").a; tinted.SetColor("_BaseColor", c); }
+                    map[orig] = tinted;
+                    galleryMats.Add(tinted);
+                }
+                dst[j] = tinted;
+            }
+            r.sharedMaterials = dst;
+        }
+    }
+
+    [ContextMenu("トンボの記録をリセット")]
+    void ClearRecords()
+    {
+        PlayerPrefs.DeleteKey(KeyCount);
+        PlayerPrefs.DeleteKey(KeyNormal);
+        PlayerPrefs.DeleteKey(KeyMax);
+        PlayerPrefs.DeleteKey(KeyMin);
+        PlayerPrefs.DeleteKey(KeyVariants);
+        PlayerPrefs.Save();
+    }
+
+
+
     void Update()
     {
         // リセットボタンは状態に関係なく常にチェックする（いつでも強制リセット可能）
+        // 記録画面：「もどる」ボタンに触れ続けたらオープニング画面へ
+        if (state == GameState.Records)
+        {
+            if (backButton != null && backButton.Tick(tipTransform, startButtonRadius, startHoldSeconds)) EnterTitle();
+            UpdateStatusText();
+            return;
+        }
+
+        // オープニング画面中はスタートボタンと記録ボタンだけを処理する
+        if (state == GameState.Title)
+        {
+            HandleStartButton();
+            if (state == GameState.Title && recordButton != null && recordButton.Tick(tipTransform, startButtonRadius, startHoldSeconds)) EnterRecords();
+            UpdateStatusText();
+            return;
+        }
+
         HandleResetButton();
         UpdateTonbo();
 
@@ -389,16 +798,15 @@ public class RotationBurstGame : MonoBehaviour
 
 void ResetGame()
     {
-        // 初期位置のリングに戻し、スコアも0に戻す
+        // メニューボタン：ゲームを中断して初期状態に戻し、オープニング（メニュー）画面へ戻る
         score = 0;
         HideTonbo();
         transform.SetPositionAndRotation(initialPos, initialRot);
         lastCenter = initialPos;
         UpdateLinePositions();
         ResetRingProgress();
-        state = GameState.Waiting;
         SetColor(colorNormal);
-        UpdateStatusText();
+        EnterTitle();
     }
 
 void ResetRingProgress()
@@ -416,6 +824,7 @@ void ResetRingProgress()
     void OnRingCleared()
     {
         score++;
+        RecordCaught();
         HideTonbo();
         if (score > bestScore) bestScore = score;
         state = GameState.Cleared;
@@ -452,7 +861,8 @@ void StartTonbo()
         // 大きさは対数正規分布：倍率 = exp(N(0, σ))。普通の大きさ(×1)が最も多く、低確率で大小に振れる
         float sizeMul = Mathf.Exp(RandomGaussian() * tonboSizeSigma);
         sizeMul = Mathf.Clamp(sizeMul, tonboSizeMinMultiplier, tonboSizeMaxMultiplier);
-        tonboInstance.transform.localScale = Vector3.one * (tonboScale * sizeMul);
+        currentTonboScale = tonboScale * sizeMul;
+        tonboInstance.transform.localScale = Vector3.one * currentTonboScale;
         tonboInstance.transform.SetPositionAndRotation(tonboStart, Quaternion.LookRotation(toPlayer, Vector3.up));
         ApplyTonboColors();
         tonboInstance.SetActive(true);
@@ -497,6 +907,7 @@ void StartTonbo()
         foreach (var m in tonboTempMats) if (m != null) Destroy(m);
         tonboTempMats.Clear();
 
+        currentVariantColors.Clear();
         if (!tonboForceRandomColor && Random.value >= tonboRandomColorChance) return;
 
         // 元のマテリアルごとに1色だけ決める（同じマテリアル＝同じ色の部分は統一）
@@ -520,6 +931,7 @@ void StartTonbo()
                     else if (tinted.HasProperty("_BaseColor")) { c.a = tinted.GetColor("_BaseColor").a; tinted.SetColor("_BaseColor", c); }
                     colorMap[orig] = tinted;
                     tonboTempMats.Add(tinted);
+                    currentVariantColors.Add(c);
                 }
                 dst[j] = tinted;
             }
@@ -711,6 +1123,18 @@ void UpdateStatusText()
 
         switch (state)
         {
+            case GameState.Records:
+                uiText.color = Color.white;
+                uiText.text = string.Format("記録{0}\n\n球に{1}秒触れてもどる", GetRecordText(), startHoldSeconds);
+                break;
+
+            case GameState.Title:
+                uiText.color = Color.white;
+                uiText.text = string.Format(
+                    "{0}\n\n緑の球（左）: スタート　青い球（右）: 記録\n{1}秒触れ続けると選択",
+                    gameTitle, startHoldSeconds);
+                break;
+
             case GameState.Waiting:
                 uiText.color = Color.white;
                 uiText.text = string.Format(
@@ -734,7 +1158,7 @@ void UpdateStatusText()
             case GameState.Failed:
                 uiText.color = colorFail;
                 uiText.text = string.Format(
-                    "ゲームオーバー\nスコア: {0}（ベスト {1}）\nリセットボタンに{2}秒触れてリトライ",
+                    "ゲームオーバー\nスコア: {0}（ベスト {1}）\nメニューボタンに{2}秒触れてメニューへ",
                     score, bestScore, resetHoldSeconds);
                 break;
         }
