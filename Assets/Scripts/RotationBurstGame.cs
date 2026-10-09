@@ -76,17 +76,35 @@ public class RotationBurstGame : MonoBehaviour
     [Tooltip("保存する色違いの最大種類数（超えたら古いものから消える）")]
     public int maxStoredVariants = 10;
     [Tooltip("記録画面：捕まえたトンボ一覧（右側）の中心位置。最初のリング中心からのローカルオフセット（X=右, Y=奥行き, Z=上）")]
-    public Vector3 recordsGalleryLocalOffset = new Vector3(0.3f, 0f, 0.05f);
+    public Vector3 recordsGalleryLocalOffset = Vector3.zero;
     [Tooltip("記録画面：トンボ一覧の列数（超えたら下の段に折り返す）")]
     public int galleryColumns = 3;
     [Tooltip("記録画面：文字（左側）の横位置（Canvas上の座標。0が中央、マイナスで左）")]
-    public float recordsTextLocalX = -300f;
+    public float recordsTextLocalX = -180f;
     [Tooltip("記録画面：文字の幅（Canvas上の座標。一覧と重ならないよう狭める）")]
     public float recordsTextWidth = 450f;
     [Tooltip("一覧のトンボ同士の間隔（メートル）")]
     public float gallerySpacing = 0.09f;
     [Tooltip("一覧のトンボの大きさ（Prefab倍率）")]
     public float galleryTonboScale = 0.02f;
+    [Tooltip("記録画面：最大・最小のトンボを並べる段の高さ（一覧の中心からのローカルZ、メートル）")]
+    public float recordsHighlightLocalZ = 0.15f;
+    [Tooltip("記録画面：最大と最小のトンボの左右の間隔（メートル）")]
+    public float recordsHighlightSpacing = 0.22f;
+    [Tooltip("記録画面：色違い一覧の中心の高さ（一覧の中心からのローカルZ、メートル）")]
+    public float recordsGridLocalZ = -0.13f;
+    [Tooltip("記録画面：最大・最小ラベルの文字の大きさ（TextMeshのcharacterSize）")]
+    public float recordsLabelCharSize = 0.003f;
+    [Tooltip("記録画面：「捕まえた数」ラベルの高さ（ローカルZ、メートル）")]
+    public float recordsCountLocalZ = 0.26f;
+    [Tooltip("記録画面：「つかまえた色」見出しの高さ（ローカルZ、メートル）")]
+    public float recordsColorsHeaderLocalZ = -0.01f;
+    [Tooltip("記録画面：トンボをプレイヤーに向けたうえで、さらに横へ回す角度（度）。0で真正面")]
+    public float galleryViewYaw = 30f;
+    [Tooltip("記録画面：トンボをプレイヤーに向けたうえで、頭を下げる角度（度）。上から見える分、胴体の色が分かりやすい")]
+    public float galleryViewPitch = 20f;
+
+
 
     [Header("メニューボタン配置（スタート=左 / 記録=右）")]
     [Tooltip("スタートボタンと記録ボタンの間隔（メートル）。startButtonLocalOffsetを中心に左右へ半分ずつ離れる")]
@@ -191,6 +209,9 @@ public class RotationBurstGame : MonoBehaviour
     private const string KeyMax = "Tonbo_MaxSize";
     private const string KeyMin = "Tonbo_MinSize";
     private const string KeyVariants = "Tonbo_Variants";
+    private const string KeyMaxColors = "Tonbo_MaxColors"; // 最大個体の配色（空=通常色）
+    private const string KeyMinColors = "Tonbo_MinColors"; // 最小個体の配色（空=通常色）
+
     private float currentTonboScale = 0f;
     private readonly List<Color> currentVariantColors = new List<Color>();
     private GameObject galleryRoot;
@@ -464,16 +485,27 @@ void CreateStartButton()
 // ===== 捕まえたトンボの記録 =====
 
     /// <summary>円をクリアした瞬間に、今のトンボの色・大きさを記録する</summary>
-    void RecordCaught()
+void RecordCaught()
     {
         if (tonboInstance == null || !tonboRunning) return;
 
         float size = currentTonboScale * tonboModelSpanMeters;
         int count = PlayerPrefs.GetInt(KeyCount, 0);
-        float max = (count == 0) ? size : Mathf.Max(PlayerPrefs.GetFloat(KeyMax, size), size);
-        float min = (count == 0) ? size : Mathf.Min(PlayerPrefs.GetFloat(KeyMin, size), size);
-        PlayerPrefs.SetFloat(KeyMax, max);
-        PlayerPrefs.SetFloat(KeyMin, min);
+        float prevMax = PlayerPrefs.GetFloat(KeyMax, size);
+        float prevMin = PlayerPrefs.GetFloat(KeyMin, size);
+        string colorStr = (currentVariantColors.Count == 0) ? "" : EncodeVariant(currentVariantColors);
+
+        // 最大・最小を更新したら、その個体の配色（モデル）も一緒に保存する
+        if (count == 0 || size > prevMax)
+        {
+            PlayerPrefs.SetFloat(KeyMax, size);
+            PlayerPrefs.SetString(KeyMaxColors, colorStr);
+        }
+        if (count == 0 || size < prevMin)
+        {
+            PlayerPrefs.SetFloat(KeyMin, size);
+            PlayerPrefs.SetString(KeyMinColors, colorStr);
+        }
         PlayerPrefs.SetInt(KeyCount, count + 1);
 
         if (currentVariantColors.Count == 0)
@@ -482,11 +514,10 @@ void CreateStartButton()
         }
         else
         {
-            string v = EncodeVariant(currentVariantColors);
             List<string> list = LoadVariantStrings();
-            if (!list.Contains(v))
+            if (!list.Contains(colorStr))
             {
-                list.Add(v);
+                list.Add(colorStr);
                 while (list.Count > maxStoredVariants) list.RemoveAt(0);
                 PlayerPrefs.SetString(KeyVariants, string.Join(";", list.ToArray()));
             }
@@ -532,44 +563,123 @@ string GetRecordText()
     }
 
     /// <summary>捕まえたことのある色のトンボを、オープニング画面に小さく並べて表示する</summary>
-    void BuildGallery()
+void BuildGallery()
     {
         if (galleryRoot != null) Destroy(galleryRoot);
         galleryRoot = null;
         foreach (var m in galleryMats) if (m != null) Destroy(m);
         galleryMats.Clear();
-        if (tonboPrefab == null) return;
 
         bool normal = PlayerPrefs.GetInt(KeyNormal, 0) > 0;
         var variants = new List<Color[]>();
         foreach (string s in LoadVariantStrings()) variants.Add(DecodeVariant(s));
         int total = (normal ? 1 : 0) + variants.Count;
-        if (total == 0) return;
+        int count = PlayerPrefs.GetInt(KeyCount, 0);
 
         galleryRoot = new GameObject("TonboGallery");
         galleryRoot.transform.SetPositionAndRotation(initialPos + initialRot * recordsGalleryLocalOffset, initialRot);
 
-        int index = 0;
-        if (normal) AddGalleryModel(index++, total, null);
-        foreach (var colors in variants) AddGalleryModel(index++, total, colors);
+        // 「もどる」ボタンの説明（ボタンの右隣）
+        Vector3 backLocal = startButtonLocalOffset + backButtonLocalOffset - recordsGalleryLocalOffset;
+        AddGalleryLabel(string.Format("球に{0}秒触れてもどる", startHoldSeconds), backLocal + new Vector3(0.2f, 0f, 0f), 1f);
+
+        if (count == 0)
+        {
+            AddGalleryLabel("まだトンボを捕まえていません", new Vector3(0f, 0f, 0.1f), 1.3f);
+            return;
+        }
+
+        AddGalleryLabel(string.Format("捕まえた数 {0}匹", count), new Vector3(0f, 0f, recordsCountLocalZ), 1.3f);
+        if (tonboPrefab == null) return;
+
+        // 上段：最大・最小の個体（モデル＋大きさ）を実際の大きさの比で並べ、ラベルで大きさを示す
+        float max = PlayerPrefs.GetFloat(KeyMax, 0f);
+        float min = PlayerPrefs.GetFloat(KeyMin, 0f);
+        float half = recordsHighlightSpacing * 0.5f;
+        AddHighlightModel(new Vector3(-half, 0f, recordsHighlightLocalZ), max,
+            PlayerPrefs.GetString(KeyMaxColors, ""), string.Format("最大 {0:F0}cm", max * 100f));
+        AddHighlightModel(new Vector3(half, 0f, recordsHighlightLocalZ), min,
+            PlayerPrefs.GetString(KeyMinColors, ""), string.Format("最小 {0:F0}cm", min * 100f));
+
+        // 下段：つかまえた色の一覧
+        if (total > 0)
+        {
+            AddGalleryLabel(string.Format("つかまえた色 {0}種類", total), new Vector3(0f, 0f, recordsColorsHeaderLocalZ), 1.1f);
+            int index = 0;
+            if (normal) AddGalleryModel(index++, total, null);
+            foreach (var colors in variants) AddGalleryModel(index++, total, colors);
+        }
     }
 
 void AddGalleryModel(int index, int total, Color[] colors)
     {
-        // 右側に格子状に並べる（galleryColumns列、超えたら下の段へ。全体は中心を基準に配置）
+        // 格子状に並べる（galleryColumns列、超えたら下の段へ。全体はrecordsGridLocalZを中心に配置）
         int cols = Mathf.Max(1, galleryColumns);
         int col = index % cols;
         int row = index / cols;
         int colsUsed = Mathf.Min(total, cols);
         int rows = (total + cols - 1) / cols;
         float x = (col - (colsUsed - 1) * 0.5f) * gallerySpacing;
-        float z = ((rows - 1) * 0.5f - row) * gallerySpacing;
+        float z = ((rows - 1) * 0.5f - row) * gallerySpacing + recordsGridLocalZ;
 
         GameObject go = Instantiate(tonboPrefab, galleryRoot.transform);
         go.transform.localPosition = new Vector3(x, 0f, z);
-        go.transform.localRotation = Quaternion.LookRotation(Vector3.right, Vector3.up); // 横向き（側面）で見せる
+        go.transform.rotation = GalleryModelRotation(go.transform.position); // プレイヤーの方（正面）を向ける
         go.transform.localScale = Vector3.one * galleryTonboScale;
         if (colors != null) TintModel(go, colors);
+    }
+
+    /// <summary>最大・最小の個体を、実際の大きさの比（ゲーム中の倍率）で表示し、下にラベルを付ける</summary>
+void AddHighlightModel(Vector3 localPos, float sizeMeters, string colorStr, string label)
+    {
+        float baseSize = tonboScale * tonboModelSpanMeters;
+        float mul = baseSize > 0f ? sizeMeters / baseSize : 1f;
+
+        GameObject go = Instantiate(tonboPrefab, galleryRoot.transform);
+        go.transform.localPosition = localPos;
+        go.transform.rotation = GalleryModelRotation(go.transform.position);
+        go.transform.localScale = Vector3.one * galleryTonboScale * mul;
+        if (!string.IsNullOrEmpty(colorStr)) TintModel(go, DecodeVariant(colorStr));
+
+        AddGalleryLabel(label, localPos + new Vector3(0f, 0f, -0.08f), 1.2f);
+    }
+
+    /// <summary>ギャラリー内の文字ラベル。プレイヤー（頭）の方を向いて読めるようにする</summary>
+void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
+    {
+        GameObject lg = new GameObject("GalleryLabel");
+        lg.transform.SetParent(galleryRoot.transform, false);
+        lg.transform.localPosition = localPos;
+        // 文字はプレイヤーの方から読める向き（TextMeshは+Z方向の反対側から見ると読める）
+        lg.transform.rotation = Quaternion.LookRotation(-DirToHead(lg.transform.position), Vector3.up);
+
+        Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        TextMesh tm = lg.AddComponent<TextMesh>();
+        tm.font = font;
+        tm.text = text;
+        tm.fontSize = 64;
+        tm.characterSize = recordsLabelCharSize * sizeMul;
+        tm.anchor = TextAnchor.MiddleCenter;
+        tm.alignment = TextAlignment.Center;
+        tm.color = Color.white;
+        lg.GetComponent<MeshRenderer>().sharedMaterial = font.material;
+    }
+
+    /// <summary>指定位置から頭（プレイヤー）へ向かう水平方向の単位ベクトル</summary>
+    Vector3 DirToHead(Vector3 worldPos)
+    {
+        Transform head = headTransform;
+        if (head == null && Camera.main != null) head = Camera.main.transform;
+        Vector3 d = (head != null) ? head.position - worldPos : Vector3.back;
+        d = Vector3.ProjectOnPlane(d, Vector3.up);
+        if (d.sqrMagnitude < 0.0001f) d = Vector3.back;
+        return d.normalized;
+    }
+
+    /// <summary>トンボをプレイヤーに向け、galleryViewYaw/Pitchぶんだけ傾けた向き</summary>
+    Quaternion GalleryModelRotation(Vector3 worldPos)
+    {
+        return Quaternion.LookRotation(DirToHead(worldPos), Vector3.up) * Quaternion.Euler(galleryViewPitch, galleryViewYaw, 0f);
     }
 
     /// <summary>元のマテリアルの出現順に、保存しておいた色を割り当てる（ApplyTonboColorsと同じ対応）</summary>
@@ -1124,8 +1234,7 @@ void UpdateStatusText()
         switch (state)
         {
             case GameState.Records:
-                uiText.color = Color.white;
-                uiText.text = string.Format("記録{0}\n\n球に{1}秒触れてもどる", GetRecordText(), startHoldSeconds);
+                uiText.text = ""; // 記録画面の情報は3D側のラベルで表示する
                 break;
 
             case GameState.Title:
