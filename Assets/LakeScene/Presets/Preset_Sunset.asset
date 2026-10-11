@@ -1,0 +1,34 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1cd4c767dbb0943898275c089edfef00, type: 3}
+  m_Name: Preset_Sunset
+  m_EditorClassIdentifier: 
+  skyTop: {r: 0.12, g: 0.14, b: 0.38, a: 1}
+  skyMid: {r: 0.62, g: 0.28, b: 0.4, a: 1}
+  skyHorizon: {r: 1, g: 0.55, b: 0.25, a: 1}
+  sunColor: {r: 1, g: 0.55, b: 0.3, a: 1}
+  sunIntensity: 1
+  sunEuler: {x: 12, y: 300, z: 0}
+  ambientColor: {r: 0.45, g: 0.3, b: 0.38, a: 1}
+  fogColor: {r: 0.8, g: 0.42, b: 0.3, a: 1}
+  fogDensity: 0.01
+  water: {r: 0.42, g: 0.24, b: 0.36, a: 1}
+  ripple: {r: 0.85, g: 0.52, b: 0.45, a: 1}
+  sakura: {r: 0.95, g: 0.55, b: 0.55, a: 1}
+  mountainNear: {r: 0.22, g: 0.14, b: 0.22, a: 1}
+  mountainMid: {r: 0.38, g: 0.22, b: 0.3, a: 1}
+  mountainFar: {r: 0.6, g: 0.36, b: 0.38, a: 1}
+  moon: 0
+  stars: 0
+  fireflies: 0.3
+  moonGlint: 0
+  lanterns: 0.7
