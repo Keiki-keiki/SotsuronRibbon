@@ -149,6 +149,10 @@ public class RotationBurstGame : MonoBehaviour
     [Header("トンボ演出")]
     [Tooltip("円に迫ってくるトンボのPrefab（Assets/Tonbo/Tonbo.prefab）")]
     public GameObject tonboPrefab;
+    [Tooltip("キュート版トンボのPrefab（Assets/Tonbo/Tonbo_cute.prefab）。選ぶとTonboと全く同じ処理で動く")]
+    public GameObject tonboCutePrefab;
+    [Tooltip("タイプ選択の球をメニュー球の高さからどれだけ上げるか（メートル）。スタート球に触れたままの誤選択を防ぐ")]
+    public float chooseButtonUpOffset = 0.15f;
     [Tooltip("トンボの大きさ（元モデルは翼を広げて約3.9mなので、0.08で約0.3m）")]
     public float tonboScale = 0.08f;
     [Tooltip("円の奥（プレイヤーと反対側）にどれだけ離れた位置から飛んでくるか（メートル）")]
@@ -181,7 +185,7 @@ public class RotationBurstGame : MonoBehaviour
     private static readonly Color resetButtonColorIdle = new Color(0.5f, 0.5f, 0.5f); // 未接触
     private static readonly Color resetButtonColorHeld = new Color(1f, 0.2f, 0.2f);   // 押し込み中〜リセット直前
 
-    private enum GameState { Title, Records, Waiting, Playing, Cleared, Failed }
+    private enum GameState { Title, ChooseType, Records, Waiting, Playing, Cleared, Failed }
     private GameState state = GameState.Title;
 
     private float lastAngle = float.NaN;
@@ -204,13 +208,13 @@ public class RotationBurstGame : MonoBehaviour
     private float startHoldTimer = 0f;
 
     // 記録関連
-    private const string KeyCount = "Tonbo_Count";
-    private const string KeyNormal = "Tonbo_NormalCount";
-    private const string KeyMax = "Tonbo_MaxSize";
-    private const string KeyMin = "Tonbo_MinSize";
-    private const string KeyVariants = "Tonbo_Variants";
-    private const string KeyMaxColors = "Tonbo_MaxColors"; // 最大個体の配色（空=通常色）
-    private const string KeyMinColors = "Tonbo_MinColors"; // 最小個体の配色（空=通常色）
+    private string KeyCount { get { return "Tonbo_Count" + Sfx; } }
+    private string KeyNormal { get { return "Tonbo_NormalCount" + Sfx; } }
+    private string KeyMax { get { return "Tonbo_MaxSize" + Sfx; } }
+    private string KeyMin { get { return "Tonbo_MinSize" + Sfx; } }
+    private string KeyVariants { get { return "Tonbo_Variants" + Sfx; } }
+    private string KeyMaxColors { get { return "Tonbo_MaxColors" + Sfx; } } // 最大個体の配色（空=通常色）
+    private string KeyMinColors { get { return "Tonbo_MinColors" + Sfx; } } // 最小個体の配色（空=通常色）
 
     private float currentTonboScale = 0f;
     private readonly List<Color> currentVariantColors = new List<Color>();
@@ -293,6 +297,8 @@ public class RotationBurstGame : MonoBehaviour
     void Start()
     {
         initialPos = transform.position;
+        realPrefab = tonboPrefab;
+        SetMode(PlayerPrefs.GetInt("Tonbo_CuteMode", 0) == 1);
         initialRot = transform.rotation;
         lastCenter = initialPos;
 
@@ -389,6 +395,7 @@ void CreateStartButton()
         if (lr != null) lr.enabled = false;
         if (galleryRoot != null) galleryRoot.SetActive(false);
         if (recordButton != null) recordButton.SetActive(true);
+        HideChoiceButtons();
         SetTextLayout(false);
         if (backButton != null) backButton.SetActive(false);
         if (resetButtonTransform != null) resetButtonTransform.gameObject.SetActive(false);
@@ -402,7 +409,7 @@ void CreateStartButton()
         if (startButtonTransform == null)
         {
             // ボタンが生成できなかった場合でもゲームが進められるようにする
-            StartGame();
+            EnterChoose();
             return;
         }
 
@@ -425,7 +432,7 @@ void CreateStartButton()
         if (startHoldTimer >= startHoldSeconds)
         {
             startHoldTimer = 0f;
-            StartGame();
+            EnterChoose();
         }
     }
 
@@ -433,6 +440,7 @@ void CreateStartButton()
     {
         if (startButtonTransform != null) startButtonTransform.gameObject.SetActive(false);
         if (resetButtonTransform != null) resetButtonTransform.gameObject.SetActive(true);
+        HideChoiceButtons();
         if (lr != null) lr.enabled = true;
         if (galleryRoot != null) galleryRoot.SetActive(false);
         if (recordButton != null) recordButton.SetActive(false);
@@ -589,7 +597,7 @@ void BuildGallery()
             return;
         }
 
-        AddGalleryLabel(string.Format("捕まえた数 {0}匹", count), new Vector3(0f, 0f, recordsCountLocalZ), 1.3f);
+        AddGalleryLabel(string.Format("捕まえた数 {0}匹（{1}）", count, cuteMode ? "キュート" : "リアル"), new Vector3(0f, 0f, recordsCountLocalZ), 1.3f);
         if (tonboPrefab == null) return;
 
         // 上段：最大・最小の個体（モデル＋大きさ）を実際の大きさの比で並べ、ラベルで大きさを示す
@@ -727,6 +735,58 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
 
 
 
+    // ===== トンボのタイプ選択（リアル / キュート） =====
+    private GameObject realPrefab;
+    private bool cuteMode = false;
+    private HoldButton realButton;
+    private HoldButton cuteButton;
+    // 記録はタイプごとに別保存（色の数などがモデルで違うため）
+    private string Sfx { get { return cuteMode ? "_cute" : ""; } }
+
+    /// <summary>使うトンボのPrefabを切り替える。Tonbo_cuteもTonboと同じ処理（大きさ・色・記録）で動く</summary>
+    void SetMode(bool cute)
+    {
+        cuteMode = cute && tonboCutePrefab != null;
+        PlayerPrefs.SetInt("Tonbo_CuteMode", cuteMode ? 1 : 0);
+        GameObject p = cuteMode ? tonboCutePrefab : realPrefab;
+        if (p == tonboPrefab) return;
+
+        HideTonbo();
+        if (tonboInstance != null) Destroy(tonboInstance);
+        tonboInstance = null;
+        tonboRenderers = null;
+        tonboOriginalMats = null;
+        foreach (var m in tonboTempMats) if (m != null) Destroy(m);
+        tonboTempMats.Clear();
+        tonboPrefab = p;
+    }
+
+    /// <summary>スタート球を選んだ後に出る、タイプ選択画面（リアル=左 / キュート=右）</summary>
+    void EnterChoose()
+    {
+        state = GameState.ChooseType;
+        startHoldTimer = 0f;
+        if (startButtonTransform != null) startButtonTransform.gameObject.SetActive(false);
+        if (recordButton != null) recordButton.SetActive(false);
+        if (realButton == null)
+        {
+            Vector3 up = initialRot * new Vector3(0f, 0f, chooseButtonUpOffset);
+            realButton = new HoldButton("RealButton_" + gameObject.name, MenuButtonPos(-0.5f) + up, startButtonSize,
+                new Color(0.55f, 0.35f, 0.15f), new Color(1f, 0.7f, 0.3f));
+            cuteButton = new HoldButton("CuteButton_" + gameObject.name, MenuButtonPos(0.5f) + up, startButtonSize,
+                new Color(0.95f, 0.5f, 0.7f), new Color(1f, 0.85f, 0.92f));
+        }
+        realButton.SetActive(true);
+        cuteButton.SetActive(true);
+        UpdateStatusText();
+    }
+
+    void HideChoiceButtons()
+    {
+        if (realButton != null) realButton.SetActive(false);
+        if (cuteButton != null) cuteButton.SetActive(false);
+    }
+
     void Update()
     {
         // リセットボタンは状態に関係なく常にチェックする（いつでも強制リセット可能）
@@ -734,6 +794,15 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
         if (state == GameState.Records)
         {
             if (backButton != null && backButton.Tick(tipTransform, startButtonRadius, startHoldSeconds)) EnterTitle();
+            UpdateStatusText();
+            return;
+        }
+
+        // タイプ選択画面：リアル（左）かキュート（右）の球に触れ続けたら、そのタイプでゲーム開始
+        if (state == GameState.ChooseType)
+        {
+            if (realButton != null && realButton.Tick(tipTransform, startButtonRadius, startHoldSeconds)) { SetMode(false); StartGame(); }
+            else if (cuteButton != null && cuteButton.Tick(tipTransform, startButtonRadius, startHoldSeconds)) { SetMode(true); StartGame(); }
             UpdateStatusText();
             return;
         }
@@ -1235,6 +1304,13 @@ void UpdateStatusText()
         {
             case GameState.Records:
                 uiText.text = ""; // 記録画面の情報は3D側のラベルで表示する
+                break;
+
+            case GameState.ChooseType:
+                uiText.color = Color.white;
+                uiText.text = string.Format(
+                    "トンボのタイプをえらんでね\n\n茶色の球（左）: リアル　ピンクの球（右）: キュート\n{0}秒触れ続けると選択",
+                    startHoldSeconds);
                 break;
 
             case GameState.Title:
