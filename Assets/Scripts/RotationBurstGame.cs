@@ -112,6 +112,16 @@ public class RotationBurstGame : MonoBehaviour
     [Tooltip("記録画面の「もどる」ボタンの位置：startButtonLocalOffsetからの追加オフセット")]
     public Vector3 backButtonLocalOffset = Vector3.zero;
 
+    [Header("メニューボタン（横長キューブ）")]
+    [Tooltip("キューブの幅（メートル）")]
+    public float menuButtonWidth = 0.34f;
+    [Tooltip("キューブの高さ（メートル）")]
+    public float menuButtonHeight = 0.1f;
+    [Tooltip("縦に並べたボタンの間隔（メートル）。高さより少し大きくすること")]
+    public float menuRowSpacing = 0.14f;
+    private HoldButton startButton;
+
+
     [Header("表示設定")]
     public float textLocalX = 0f;
     public float textLocalY = -80f;
@@ -185,7 +195,7 @@ public class RotationBurstGame : MonoBehaviour
     private static readonly Color resetButtonColorIdle = new Color(0.5f, 0.5f, 0.5f); // 未接触
     private static readonly Color resetButtonColorHeld = new Color(1f, 0.2f, 0.2f);   // 押し込み中〜リセット直前
 
-    private enum GameState { Title, ChooseType, Records, Waiting, Playing, Cleared, Failed }
+    private enum GameState { Title, Settings, ChooseType, Records, Waiting, Playing, Cleared, Failed }
     private GameState state = GameState.Title;
 
     private float lastAngle = float.NaN;
@@ -222,51 +232,7 @@ public class RotationBurstGame : MonoBehaviour
     private HoldButton recordButton;
     private HoldButton backButton;
 
-    /// <summary>球に触れ続けると押せるシンプルなボタン（記録ボタン・もどるボタン用）</summary>
-    private class HoldButton
-    {
-        public Transform t;
-        private Renderer r;
-        private float timer;
-        private Color idle, held;
-
-        public HoldButton(string name, Vector3 pos, float size, Color idle, Color held)
-        {
-            this.idle = idle;
-            this.held = held;
-            GameObject go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            go.name = name;
-            Object.Destroy(go.GetComponent<SphereCollider>());
-            go.transform.position = pos;
-            go.transform.localScale = Vector3.one * size;
-            r = go.GetComponent<Renderer>();
-            r.material = new Material(Shader.Find("Sprites/Default"));
-            r.material.color = idle;
-            t = go.transform;
-        }
-
-        public void SetActive(bool active)
-        {
-            timer = 0f;
-            if (r != null) r.material.color = idle;
-            if (t != null) t.gameObject.SetActive(active);
-        }
-
-        /// <summary>毎フレーム呼ぶ。holdSeconds秒触れ続けたらtrueを返す</summary>
-        public bool Tick(Transform tip, float radius, float holdSeconds)
-        {
-            if (t == null) return false;
-            bool touching = tip != null && Vector3.Distance(tip.position, t.position) <= radius;
-            timer = touching ? timer + Time.deltaTime : Mathf.Max(0f, timer - Time.deltaTime * 2f);
-            r.material.color = Color.Lerp(idle, held, Mathf.Clamp01(timer / holdSeconds));
-            if (timer >= holdSeconds)
-            {
-                timer = 0f;
-                return true;
-            }
-            return false;
-        }
-    }
+    
     private readonly List<Material> galleryMats = new List<Material>();
     private static readonly Color startButtonColorIdle = new Color(0.2f, 0.6f, 0.3f);
     private static readonly Color startButtonColorHeld = new Color(0.4f, 1f, 0.5f);
@@ -367,24 +333,25 @@ public class RotationBurstGame : MonoBehaviour
 
 void CreateStartButton()
     {
-        GameObject btn = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        btn.name = "StartButton_" + gameObject.name;
-        Destroy(btn.GetComponent<SphereCollider>());
-        btn.transform.position = MenuButtonPos(-0.5f);
-        btn.transform.localScale = Vector3.one * startButtonSize;
-
-        startButtonRenderer = btn.GetComponent<Renderer>();
-        startButtonRenderer.material = new Material(Shader.Find("Sprites/Default"));
-        startButtonRenderer.material.color = startButtonColorIdle;
-
-        startButtonTransform = btn.transform;
-
-        recordButton = new HoldButton("RecordButton_" + gameObject.name, MenuButtonPos(0.5f), startButtonSize,
+        startButton = MakeButton("StartButton_" + gameObject.name, MenuButtonPos(1f), "プレイ",
+            new Color(0.2f, 0.6f, 0.3f), new Color(0.4f, 1f, 0.5f));
+        startButtonTransform = startButton.t;
+        recordButton = MakeButton("RecordButton_" + gameObject.name, MenuButtonPos(0f), "記録",
             new Color(0.2f, 0.4f, 0.8f), new Color(0.4f, 0.7f, 1f));
-        backButton = new HoldButton("BackButton_" + gameObject.name,
-            initialPos + initialRot * (startButtonLocalOffset + backButtonLocalOffset), startButtonSize,
+        backButton = MakeButton("BackButton_" + gameObject.name,
+            initialPos + initialRot * (startButtonLocalOffset + backButtonLocalOffset), "もどる",
             new Color(0.5f, 0.5f, 0.5f), new Color(1f, 1f, 1f));
         backButton.SetActive(false);
+    }
+
+    /// <summary>頭の方を向いた横長キューブのボタンを作る</summary>
+HoldButton MakeButton(string name, Vector3 pos, string label, Color idle, Color held)
+    {
+        // 向きは全ボタン共通（メニュー中心から頭への水平方向）にして、面を揃える
+        Vector3 center = initialPos + initialRot * startButtonLocalOffset;
+        Quaternion rot = Quaternion.LookRotation(-DirToHead(center), Vector3.up);
+        return new HoldButton(name, pos, rot, new Vector2(menuButtonWidth, menuButtonHeight),
+            label, recordsLabelCharSize * 1.3f, idle, held);
     }
 
     /// <summary>オープニング画面に入る：リングとリセットボタンを隠し、スタートボタンを表示する</summary>
@@ -396,6 +363,8 @@ void CreateStartButton()
         if (galleryRoot != null) galleryRoot.SetActive(false);
         if (recordButton != null) recordButton.SetActive(true);
         HideChoiceButtons();
+        InitSettings();
+        if (settingsButton != null) settingsButton.SetActive(true);
         SetTextLayout(false);
         if (backButton != null) backButton.SetActive(false);
         if (resetButtonTransform != null) resetButtonTransform.gameObject.SetActive(false);
@@ -404,36 +373,15 @@ void CreateStartButton()
     }
 
     /// <summary>スタートボタンにstartHoldSeconds秒触れ続けたらゲーム開始</summary>
-    void HandleStartButton()
+void HandleStartButton()
     {
-        if (startButtonTransform == null)
+        if (startButton == null)
         {
             // ボタンが生成できなかった場合でもゲームが進められるようにする
             EnterChoose();
             return;
         }
-
-        bool touching = false;
-        if (tipTransform != null)
-        {
-            float dist = Vector3.Distance(tipTransform.position, startButtonTransform.position);
-            touching = dist <= startButtonRadius;
-        }
-
-        if (touching) startHoldTimer += Time.deltaTime;
-        else startHoldTimer = Mathf.Max(0f, startHoldTimer - Time.deltaTime * 2f);
-
-        if (startButtonRenderer != null)
-        {
-            float progress = Mathf.Clamp01(startHoldTimer / startHoldSeconds);
-            startButtonRenderer.material.color = Color.Lerp(startButtonColorIdle, startButtonColorHeld, progress);
-        }
-
-        if (startHoldTimer >= startHoldSeconds)
-        {
-            startHoldTimer = 0f;
-            EnterChoose();
-        }
+        if (startButton.Tick(tipTransform, startButtonRadius, startHoldSeconds)) EnterChoose();
     }
 
     void StartGame()
@@ -453,9 +401,11 @@ void CreateStartButton()
     }
 
 /// <summary>メニューボタンの位置。side=-0.5でスタート（左）、+0.5で記録（右）</summary>
-    Vector3 MenuButtonPos(float side)
+Vector3 MenuButtonPos(float row)
     {
-        return initialPos + initialRot * (startButtonLocalOffset + new Vector3(menuButtonGap * side, 0f, 0f));
+        // 行は必ずワールドの真上方向にずらす（リング面が傾いていても、全ボタンの奥行きが同じになる）
+        Vector3 center = initialPos + initialRot * startButtonLocalOffset;
+        return center + Vector3.up * (menuRowSpacing * row);
     }
 
     /// <summary>記録画面に入る：メニューボタンを隠し、捕まえたトンボ一覧と「もどる」ボタンを出す</summary>
@@ -466,6 +416,7 @@ void CreateStartButton()
         if (startButtonTransform != null) startButtonTransform.gameObject.SetActive(false);
         if (recordButton != null) recordButton.SetActive(false);
         if (backButton != null) backButton.SetActive(true);
+        if (settingsButton != null) settingsButton.SetActive(false);
         SetTextLayout(true);
         BuildGallery();
         UpdateStatusText();
@@ -589,7 +540,7 @@ void BuildGallery()
 
         // 「もどる」ボタンの説明（ボタンの右隣）
         Vector3 backLocal = startButtonLocalOffset + backButtonLocalOffset - recordsGalleryLocalOffset;
-        AddGalleryLabel(string.Format("球に{0}秒触れてもどる", startHoldSeconds), backLocal + new Vector3(0.2f, 0f, 0f), 1f);
+        // （「もどる」はボタン自体にラベルあり）
 
         if (count == 0)
         {
@@ -762,18 +713,18 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
     }
 
     /// <summary>スタート球を選んだ後に出る、タイプ選択画面（リアル=左 / キュート=右）</summary>
-    void EnterChoose()
+void EnterChoose()
     {
         state = GameState.ChooseType;
         startHoldTimer = 0f;
         if (startButtonTransform != null) startButtonTransform.gameObject.SetActive(false);
         if (recordButton != null) recordButton.SetActive(false);
+        if (settingsButton != null) settingsButton.SetActive(false);
         if (realButton == null)
         {
-            Vector3 up = initialRot * new Vector3(0f, 0f, chooseButtonUpOffset);
-            realButton = new HoldButton("RealButton_" + gameObject.name, MenuButtonPos(-0.5f) + up, startButtonSize,
+            realButton = MakeButton("RealButton_" + gameObject.name, MenuButtonPos(0.5f), "リアルなトンボ",
                 new Color(0.55f, 0.35f, 0.15f), new Color(1f, 0.7f, 0.3f));
-            cuteButton = new HoldButton("CuteButton_" + gameObject.name, MenuButtonPos(0.5f) + up, startButtonSize,
+            cuteButton = MakeButton("CuteButton_" + gameObject.name, MenuButtonPos(-0.5f), "可愛いトンボ",
                 new Color(0.95f, 0.5f, 0.7f), new Color(1f, 0.85f, 0.92f));
         }
         realButton.SetActive(true);
@@ -783,8 +734,44 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
 
     void HideChoiceButtons()
     {
+        if (settingsButton != null) settingsButton.SetActive(false);
+        if (settingsPanel != null) settingsPanel.SetActive(false);
         if (realButton != null) realButton.SetActive(false);
         if (cuteButton != null) cuteButton.SetActive(false);
+    }
+
+    // ===== 設定画面（BGM・効果音・画面の明るさを、棒の先端でスライドして調整） =====
+    [Header("設定画面")]
+    [Tooltip("設定ボタン（オープニング画面）の位置：メニュー中心からのローカルオフセット（X=右, Y=奥行き, Z=上）")]
+    public Vector3 settingsButtonOffset = new Vector3(0f, 0f, -0.15f);
+    [Tooltip("設定画面のスライダー群の中心：メニュー中心からのローカルオフセット。「もどる」球と重ならないよう上に置く")]
+    public Vector3 settingsPanelOffset = new Vector3(0f, 0f, 0.34f);
+    private HoldButton settingsButton;
+    private SettingsPanel settingsPanel;
+
+void InitSettings()
+    {
+        if (settingsPanel != null) return;
+        GameObject b = GameObject.Find("BGM");
+        AudioSource bgm = (b != null) ? b.GetComponent<AudioSource>() : null;
+        settingsPanel = new SettingsPanel(initialPos + initialRot * (startButtonLocalOffset + settingsPanelOffset), initialRot,
+            bgm, audioSource, recordsLabelCharSize, backButtonLocalOffset - settingsPanelOffset, "");
+        settingsButton = MakeButton("SettingsButton_" + gameObject.name, MenuButtonPos(-1f), "設定",
+            new Color(0.8f, 0.5f, 0.1f), new Color(1f, 0.8f, 0.4f));
+        settingsPanel.SetActive(false);
+    }
+
+    void EnterSettings()
+    {
+        state = GameState.Settings;
+        startHoldTimer = 0f;
+        if (startButtonTransform != null) startButtonTransform.gameObject.SetActive(false);
+        if (recordButton != null) recordButton.SetActive(false);
+        if (settingsButton != null) settingsButton.SetActive(false);
+        if (backButton != null) backButton.SetActive(true);
+        if (settingsPanel != null) settingsPanel.SetActive(true);
+        SetTextLayout(false);
+        UpdateStatusText();
     }
 
     void Update()
@@ -794,6 +781,19 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
         if (state == GameState.Records)
         {
             if (backButton != null && backButton.Tick(tipTransform, startButtonRadius, startHoldSeconds)) EnterTitle();
+            UpdateStatusText();
+            return;
+        }
+
+        // 設定画面：スライダーを先端でなぞる。「もどる」球に触れ続けたら保存してオープニングへ
+        if (state == GameState.Settings)
+        {
+            if (settingsPanel != null) settingsPanel.Tick(tipTransform);
+            if (backButton != null && backButton.Tick(tipTransform, startButtonRadius, startHoldSeconds))
+            {
+                if (settingsPanel != null) settingsPanel.Save();
+                EnterTitle();
+            }
             UpdateStatusText();
             return;
         }
@@ -812,6 +812,7 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
         {
             HandleStartButton();
             if (state == GameState.Title && recordButton != null && recordButton.Tick(tipTransform, startButtonRadius, startHoldSeconds)) EnterRecords();
+            if (state == GameState.Title && settingsButton != null && settingsButton.Tick(tipTransform, startButtonRadius, startHoldSeconds)) EnterSettings();
             UpdateStatusText();
             return;
         }
@@ -1303,21 +1304,10 @@ void UpdateStatusText()
         switch (state)
         {
             case GameState.Records:
-                uiText.text = ""; // 記録画面の情報は3D側のラベルで表示する
-                break;
-
+            case GameState.Settings:
             case GameState.ChooseType:
-                uiText.color = Color.white;
-                uiText.text = string.Format(
-                    "トンボのタイプをえらんでね\n\n茶色の球（左）: リアル　ピンクの球（右）: キュート\n{0}秒触れ続けると選択",
-                    startHoldSeconds);
-                break;
-
             case GameState.Title:
-                uiText.color = Color.white;
-                uiText.text = string.Format(
-                    "{0}\n\n緑の球（左）: スタート　青い球（右）: 記録\n{1}秒触れ続けると選択",
-                    gameTitle, startHoldSeconds);
+                uiText.text = ""; // メニュー系の画面は、ボタン（横長キューブ）のラベルだけで案内する
                 break;
 
             case GameState.Waiting:
