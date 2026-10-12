@@ -96,6 +96,10 @@ public class RotationBurstGame : MonoBehaviour
     public float menuRowSpacing = 0.14f;
     private HoldButton startButton;
     private HoldButton gameOverButton;
+    private bool ready;
+    [Tooltip("起動時にプレイヤーの頭をこの高さ（メートル）にあるものとして、ゲーム全体を置く。全体の高さを上下したいときはこの値を変える")]
+    public float referenceHeadHeight = 1.3f;
+
 
     [Header("メニュー配置（X=右、Y=上、Z=奥。プレイヤーから遠ざかる向きが＋）")]
     [Tooltip("メニューボタン全体の位置。リングの初期位置からのずれ（メートル）")]
@@ -244,7 +248,43 @@ public class RotationBurstGame : MonoBehaviour
     private bool dbgHasTip = false;
     private float flashUntil = -1f;
 
-    void Start()
+    System.Collections.IEnumerator Start()
+    {
+        // 頭の位置が取れるまで待ち、立ち位置・向き・身長に関係なく、毎回同じ位置関係でゲームを置く
+        yield return AlignPlayerSpace();
+        InitGame();
+        ready = true;
+    }
+
+    System.Collections.IEnumerator AlignPlayerSpace()
+    {
+        OVRCameraRig rig = null;
+        Transform head = null;
+        float t = 0f;
+        while (t < 3f)
+        {
+            head = headTransform != null ? headTransform : (Camera.main != null ? Camera.main.transform : null);
+            if (head != null)
+            {
+                if (rig == null) rig = head.GetComponentInParent<OVRCameraRig>();
+                if (head.position.y > 0.3f) break; // 追跡が始まった
+            }
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        if (rig == null || head == null || head.position.y <= 0.3f) yield break; // エディタなど追跡なし：そのまま
+
+        yield return new WaitForSeconds(0.3f); // 追跡が落ち着くのを待つ
+
+        // 頭の水平向きを+Zに、頭の位置をX=0・Z=0・高さreferenceHeadHeightに合わせる
+        Vector3 f = Vector3.ProjectOnPlane(head.forward, Vector3.up);
+        if (f.sqrMagnitude > 1e-4f)
+            rig.transform.RotateAround(head.position, Vector3.up, -Quaternion.LookRotation(f).eulerAngles.y);
+        Vector3 p = head.position;
+        rig.transform.position += new Vector3(-p.x, referenceHeadHeight - p.y, -p.z);
+    }
+
+    void InitGame()
     {
         initialPos = transform.position;
         realPrefab = tonboPrefab;
@@ -404,6 +444,7 @@ void HandleStartButton()
         if (backButton != null) backButton.SetActive(true);
         if (settingsButton != null) settingsButton.SetActive(false);
         SetTextLayout(true);
+        ShowRecordModeButtons();
         BuildGallery();
         UpdateStatusText();
     }
@@ -522,7 +563,9 @@ void BuildGallery()
         int count = PlayerPrefs.GetInt(KeyCount, 0);
 
         galleryRoot = new GameObject("TonboGallery");
-        galleryRoot.transform.SetPositionAndRotation(initialPos + Off(recordsGalleryOffset), initialRot);
+        // 傾けず、メニューボタンと同じ向きで立てる（文字もモデルも同じ面に並ぶ）。パネル内: X=右、Z=上
+        Vector3 galleryPos = initialPos + Off(recordsGalleryOffset);
+        galleryRoot.transform.SetPositionAndRotation(galleryPos, Quaternion.LookRotation(Vector3.up, DirToHead(galleryPos)));
 
         // 「もどる」ボタンの説明（ボタンの右隣）
         Vector3 backLocal = Quaternion.Inverse(initialRot) * (MenuCenter() + Off(backButtonOffset) - galleryRoot.transform.position);
@@ -596,7 +639,7 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
         lg.transform.SetParent(galleryRoot.transform, false);
         lg.transform.localPosition = localPos;
         // 文字はプレイヤーの方から読める向き（TextMeshは+Z方向の反対側から見ると読める）
-        lg.transform.rotation = Quaternion.LookRotation(-DirToHead(lg.transform.position), Vector3.up);
+        lg.transform.rotation = Quaternion.LookRotation(-DirToHead(galleryRoot.transform.position), Vector3.up); // 全ラベル共通の向き
 
         Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         TextMesh tm = lg.AddComponent<TextMesh>();
@@ -624,7 +667,7 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
     /// <summary>トンボをプレイヤーに向け、galleryViewYaw/Pitchぶんだけ傾けた向き</summary>
     Quaternion GalleryModelRotation(Vector3 worldPos)
     {
-        return Quaternion.LookRotation(DirToHead(worldPos), Vector3.up) * Quaternion.Euler(galleryViewPitch, galleryViewYaw, 0f);
+        return Quaternion.LookRotation(DirToHead(galleryRoot.transform.position), Vector3.up) * Quaternion.Euler(galleryViewPitch, galleryViewYaw, 0f);
     }
 
     /// <summary>元のマテリアルの出現順に、保存しておいた色を割り当てる（ApplyTonboColorsと同じ対応）</summary>
@@ -718,12 +761,31 @@ void EnterChoose()
         UpdateStatusText();
     }
 
-    void HideChoiceButtons()
+void HideChoiceButtons()
     {
         if (settingsButton != null) settingsButton.SetActive(false);
         if (settingsPanel != null) settingsPanel.SetActive(false);
         if (realButton != null) realButton.SetActive(false);
         if (cuteButton != null) cuteButton.SetActive(false);
+        if (recReal != null) recReal.SetActive(false);
+        if (recCute != null) recCute.SetActive(false);
+    }
+
+    // ===== 記録画面：リアル／可愛いの記録切り替え =====
+    private HoldButton recReal;
+    private HoldButton recCute;
+
+    void ShowRecordModeButtons()
+    {
+        if (recReal == null)
+        {
+            recReal = MakeButton("RecordRealButton_" + gameObject.name, MenuButtonPos(0.5f), "リアルの記録",
+                new Color(0.55f, 0.35f, 0.15f), new Color(1f, 0.7f, 0.3f));
+            recCute = MakeButton("RecordCuteButton_" + gameObject.name, MenuButtonPos(-0.5f), "可愛いの記録",
+                new Color(0.95f, 0.5f, 0.7f), new Color(1f, 0.85f, 0.92f));
+        }
+        recReal.SetActive(true);
+        recCute.SetActive(true);
     }
 
     // ===== 設定画面（BGM・効果音・画面の明るさを、棒の先端でスライドして調整） =====
@@ -763,10 +825,14 @@ void InitSettings()
 
     void Update()
     {
+        if (!ready) return;
         // リセットボタンは状態に関係なく常にチェックする（いつでも強制リセット可能）
         // 記録画面：「もどる」ボタンに触れ続けたらオープニング画面へ
         if (state == GameState.Records)
         {
+            // 記録の種類を切り替える（選んだタイプの記録とモデルで一覧を作り直す）
+            if (recReal != null && recReal.Tick(tipTransform, startButtonRadius, startHoldSeconds)) { SetMode(false); BuildGallery(); }
+            if (recCute != null && recCute.Tick(tipTransform, startButtonRadius, startHoldSeconds)) { SetMode(true); BuildGallery(); }
             if (backButton != null && backButton.Tick(tipTransform, startButtonRadius, startHoldSeconds)) EnterTitle();
             UpdateStatusText();
             return;
