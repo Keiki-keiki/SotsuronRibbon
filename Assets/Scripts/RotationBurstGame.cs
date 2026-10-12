@@ -14,7 +14,7 @@ using System.Collections.Generic;
 /// 必要であれば、外れた瞬間に即失敗にする「abort-on-exit」方式に戻すことも可能。
 ///
 /// リセットは物理ボタン方式：リング右上に生成される球（ResetButton）に
-/// tipTransformをresetHoldSeconds秒(既定2秒)触れ続けると、状態（Waiting/Playing/Cleared/Failed）に
+/// tipTransformをstartHoldSeconds秒触れ続けると、状態（Waiting/Playing/Cleared/Failed）に
 /// 関係なくいつでも強制リセットできる。ボタンはリングと同じ平面上（同じ奥行き）に置かれるため、
 /// カメラ（顔）の近くに浮いて視界を塞ぐことはない。
 ///
@@ -27,14 +27,14 @@ public class RotationBurstGame : MonoBehaviour
 {
     [Header("円の設定")]
     public float ringRadius = 0.15f;
-    public int segments = 64;
+    private int segments = 64;
     [Tooltip("円の不透明度（0=完全に透明、1=不透明）。小さいほど奥のトンボが見やすい")]
     [Range(0f, 1f)]
-    public float ringAlpha = 0.3f;
+    private float ringAlpha = 0.3f;
 
     [Header("なぞり判定設定（この範囲内にいる間だけ回転をカウントする）")]
-    public float thicknesHalf = 0.07f;
-    public float depthTolerance = 0.05f;
+    private float thicknesHalf = 0.07f;
+    private float depthTolerance = 0.08f;
 
     [Header("クリア条件")]
     [Tooltip("挑戦1回あたりの制限時間（秒）")]
@@ -46,71 +46,46 @@ public class RotationBurstGame : MonoBehaviour
     [Tooltip("クリアに必要なバースト達成回数")]
     public int requiredBursts = 3;
 
-    [Header("メニューボタン（棒の先端でresetHoldSeconds秒触れると、いつでもメニュー画面に戻る）")]
-    [Tooltip("ボタンの位置：リング中心からローカルX（右方向）にどれだけ離すか（メートル）")]
-    public float resetButtonRightOffset = 0.25f;
-    [Tooltip("ボタンの位置：リング中心からローカルZ（上方向）にどれだけ離すか（メートル）")]
-    public float resetButtonUpOffset = 0.22f;
-    [Tooltip("ボタンの見た目のサイズ（直径、メートル）")]
-    public float resetButtonSize = 0.12f;
-    [Tooltip("ボタンの判定半径（この距離以内なら触れているとみなす）")]
-    public float resetButtonRadius = 0.09f;
-    [Tooltip("この秒数だけ触れ続けたらリセットする")]
-    public float resetHoldSeconds = 2f;
 
-    [Header("オープニング画面 / スタートボタン（球に触れ続けるとゲーム開始）")]
-    [Tooltip("オープニング画面に表示するタイトル")]
-    public string gameTitle = "リングゲーム";
-    [Tooltip("スタートボタンの位置：最初のリング中心からのローカルオフセット（X=右, Y=奥行き, Z=上）")]
-    public Vector3 startButtonLocalOffset = Vector3.zero;
-    [Tooltip("スタートボタンの見た目のサイズ（直径、メートル）")]
-    public float startButtonSize = 0.12f;
     [Tooltip("スタートボタンの判定半径（この距離以内なら触れているとみなす）")]
-    public float startButtonRadius = 0.09f;
+    private float startButtonRadius = 0.09f;
     [Tooltip("この秒数だけ触れ続けたらゲーム開始")]
     public float startHoldSeconds = 2f;
 
     [Header("記録（オープニング画面に表示。PlayerPrefsに保存され、アプリを閉じても残る）")]
     [Tooltip("トンボの実寸の目安：Prefabの倍率1あたりの翼長（メートル）。元モデルは約3.9m")]
-    public float tonboModelSpanMeters = 3.9f;
+    private float tonboModelSpanMeters = 3.9f;
     [Tooltip("保存する色違いの最大種類数（超えたら古いものから消える）")]
-    public int maxStoredVariants = 10;
-    [Tooltip("記録画面：捕まえたトンボ一覧（右側）の中心位置。最初のリング中心からのローカルオフセット（X=右, Y=奥行き, Z=上）")]
-    public Vector3 recordsGalleryLocalOffset = Vector3.zero;
+    private int maxStoredVariants = 10;
     [Tooltip("記録画面：トンボ一覧の列数（超えたら下の段に折り返す）")]
-    public int galleryColumns = 3;
+    private int galleryColumns = 3;
     [Tooltip("記録画面：文字（左側）の横位置（Canvas上の座標。0が中央、マイナスで左）")]
-    public float recordsTextLocalX = -180f;
+    private float recordsTextLocalX = -180f;
     [Tooltip("記録画面：文字の幅（Canvas上の座標。一覧と重ならないよう狭める）")]
-    public float recordsTextWidth = 450f;
+    private float recordsTextWidth = 450f;
     [Tooltip("一覧のトンボ同士の間隔（メートル）")]
-    public float gallerySpacing = 0.09f;
+    private float gallerySpacing = 0.09f;
     [Tooltip("一覧のトンボの大きさ（Prefab倍率）")]
-    public float galleryTonboScale = 0.02f;
+    private float galleryTonboScale = 0.02f;
     [Tooltip("記録画面：最大・最小のトンボを並べる段の高さ（一覧の中心からのローカルZ、メートル）")]
-    public float recordsHighlightLocalZ = 0.15f;
+    private float recordsHighlightLocalZ = 0.13f;
     [Tooltip("記録画面：最大と最小のトンボの左右の間隔（メートル）")]
-    public float recordsHighlightSpacing = 0.22f;
+    private float recordsHighlightSpacing = 0.22f;
     [Tooltip("記録画面：色違い一覧の中心の高さ（一覧の中心からのローカルZ、メートル）")]
-    public float recordsGridLocalZ = -0.13f;
+    private float recordsGridLocalZ = -0.12f;
     [Tooltip("記録画面：最大・最小ラベルの文字の大きさ（TextMeshのcharacterSize）")]
-    public float recordsLabelCharSize = 0.003f;
+    private float recordsLabelCharSize = 0.003f;
     [Tooltip("記録画面：「捕まえた数」ラベルの高さ（ローカルZ、メートル）")]
-    public float recordsCountLocalZ = 0.26f;
+    private float recordsCountLocalZ = 0.26f;
     [Tooltip("記録画面：「つかまえた色」見出しの高さ（ローカルZ、メートル）")]
-    public float recordsColorsHeaderLocalZ = -0.01f;
+    private float recordsColorsHeaderLocalZ = -0.01f;
     [Tooltip("記録画面：トンボをプレイヤーに向けたうえで、さらに横へ回す角度（度）。0で真正面")]
-    public float galleryViewYaw = 30f;
+    private float galleryViewYaw = 30f;
     [Tooltip("記録画面：トンボをプレイヤーに向けたうえで、頭を下げる角度（度）。上から見える分、胴体の色が分かりやすい")]
-    public float galleryViewPitch = 20f;
+    private float galleryViewPitch = 20f;
 
 
 
-    [Header("メニューボタン配置（スタート=左 / 記録=右）")]
-    [Tooltip("スタートボタンと記録ボタンの間隔（メートル）。startButtonLocalOffsetを中心に左右へ半分ずつ離れる")]
-    public float menuButtonGap = 0.3f;
-    [Tooltip("記録画面の「もどる」ボタンの位置：startButtonLocalOffsetからの追加オフセット")]
-    public Vector3 backButtonLocalOffset = Vector3.zero;
 
     [Header("メニューボタン（横長キューブ）")]
     [Tooltip("キューブの幅（メートル）")]
@@ -121,8 +96,18 @@ public class RotationBurstGame : MonoBehaviour
     public float menuRowSpacing = 0.14f;
     private HoldButton startButton;
     private HoldButton gameOverButton;
-    [Tooltip("ゲームオーバー時に出る「メニュー」ボタンの位置：メニュー中心からの行数（マイナスで下、1行=menuRowSpacing）")]
-    public float gameOverButtonRow = -1.5f;
+
+    [Header("メニュー配置（X=右、Y=上、Z=奥。プレイヤーから遠ざかる向きが＋）")]
+    [Tooltip("メニューボタン全体の位置。リングの初期位置からのずれ（メートル）")]
+    public Vector3 menuOffset = new Vector3(0f, 0.551f, -0.19f);
+    [Tooltip("「もどる」ボタンの位置。メニュー中心からのずれ")]
+    public Vector3 backButtonOffset = new Vector3(0f, 0.959f, 0.413f);
+    [Tooltip("ゲームオーバー時の「メニュー」ボタンの位置。メニュー中心からのずれ")]
+    public Vector3 gameOverButtonOffset = new Vector3(0f, -0.3f, 0f);
+    [Tooltip("設定画面（スライダー）の位置。Menu Offsetと同じ数値にすると、メニューと同じ高さ・奥行きになる（リングの初期位置からのずれ）")]
+    public Vector3 settingsPanelOffset = new Vector3(0f, 0.551f, -0.19f);
+    [Tooltip("記録画面（トンボ一覧）の位置。リングの初期位置からのずれ")]
+    public Vector3 recordsGalleryOffset = new Vector3(0.3f, 0.038f, 0.032f);
     [Tooltip("ボタンが反応した（長押し完了）ときに鳴らす音")]
     public AudioClip buttonClip;
 
@@ -131,7 +116,7 @@ public class RotationBurstGame : MonoBehaviour
     [Header("表示設定")]
     public float textLocalX = 0f;
     public float textLocalY = -80f;
-    public int textFontSize = 36;
+    private int textFontSize = 36;
 
     [Header("参照")]
     public Transform tipTransform;
@@ -156,36 +141,34 @@ public class RotationBurstGame : MonoBehaviour
     
     
     [Tooltip("前回のリング中心から最低これだけ離す（メートル）")]
-    public float minSpawnSeparation = 0.2f;
+    private float minSpawnSeparation = 0.2f;
     [Tooltip("クリア後、次のリングが出るまでの待ち時間（秒）")]
     public float nextRingDelay = 1f;
     [Tooltip("true: リング出現と同時に制限時間スタート / false: なぞり始めてからスタート")]
-    public bool timerStartsOnSpawn = true;
+    private bool timerStartsOnSpawn = true;
 
     [Header("トンボ演出")]
     [Tooltip("円に迫ってくるトンボのPrefab（Assets/Tonbo/Tonbo.prefab）")]
     public GameObject tonboPrefab;
     [Tooltip("キュート版トンボのPrefab（Assets/Tonbo/Tonbo_cute.prefab）。選ぶとTonboと全く同じ処理で動く")]
     public GameObject tonboCutePrefab;
-    [Tooltip("タイプ選択の球をメニュー球の高さからどれだけ上げるか（メートル）。スタート球に触れたままの誤選択を防ぐ")]
-    public float chooseButtonUpOffset = 0.15f;
     [Tooltip("トンボの大きさ（元モデルは翼を広げて約3.9mなので、0.08で約0.3m）")]
-    public float tonboScale = 0.08f;
+    private float tonboScale = 0.08f;
     [Tooltip("円の奥（プレイヤーと反対側）にどれだけ離れた位置から飛んでくるか（メートル）")]
-    public float tonboStartDistance = 2.0f;
+    private float tonboStartDistance = 2f;
     [Tooltip("飛んでくる途中の上下左右のゆらぎの大きさ（メートル）")]
-    public float tonboWobble = 0.04f;
+    private float tonboWobble = 0.04f;
     [Tooltip("トンボの色がランダムになる確率（0.001 = 0.1%）。トンボが出現するたびに抽選")]
     [Range(0f, 1f)]
-    public float tonboRandomColorChance = 0.001f;
+    private float tonboRandomColorChance = 0.01f;
     [Tooltip("デバッグ用：trueにすると毎回ランダム色になる（確認後はfalseに戻すこと）")]
     public bool tonboForceRandomColor = false;
     [Tooltip("大きさのばらつき（対数正規分布のσ）。0で全部同じ大きさ。0.25なら約68%が×0.78〜×1.28、約95%が×0.61〜×1.65")]
-    public float tonboSizeSigma = 0.25f;
+    private float tonboSizeSigma = 0.25f;
     [Tooltip("大きさの倍率の下限（極端に小さくなりすぎないように）")]
-    public float tonboSizeMinMultiplier = 0.4f;
+    private float tonboSizeMinMultiplier = 0.4f;
     [Tooltip("大きさの倍率の上限（極端に大きくなりすぎないように）")]
-    public float tonboSizeMaxMultiplier = 2.5f;
+    private float tonboSizeMaxMultiplier = 2.5f;
 
     private LineRenderer lr;
     private AudioSource audioSource;
@@ -198,8 +181,6 @@ public class RotationBurstGame : MonoBehaviour
     private static readonly Color colorClear = new Color(0.2f, 1f, 0.4f);  // クリア
     private static readonly Color colorFail = new Color(1f, 0.3f, 0.3f);  // 失敗
 
-    private static readonly Color resetButtonColorIdle = new Color(0.5f, 0.5f, 0.5f); // 未接触
-    private static readonly Color resetButtonColorHeld = new Color(1f, 0.2f, 0.2f);   // 押し込み中〜リセット直前
 
     private enum GameState { Title, Settings, ChooseType, Records, Waiting, Playing, Cleared, Failed }
     private GameState state = GameState.Title;
@@ -214,13 +195,10 @@ public class RotationBurstGame : MonoBehaviour
     private int burstCount = 0;
 
     // リセットボタン関連
-    private Transform resetButtonTransform;
-    private Renderer resetButtonRenderer;
     private float resetHoldTimer = 0f;
 
     // スタートボタン関連
     private Transform startButtonTransform;
-    private Renderer startButtonRenderer;
     private float startHoldTimer = 0f;
 
     // 記録関連
@@ -321,7 +299,7 @@ public class RotationBurstGame : MonoBehaviour
 void CreateResetButton()
     {
         // ゲームオーバー時だけ出る、横長キューブの「メニュー」ボタン
-        gameOverButton = MakeButton("MenuButton_" + gameObject.name, MenuButtonPos(gameOverButtonRow), "メニュー",
+        gameOverButton = MakeButton("MenuButton_" + gameObject.name, MenuCenter() + Off(gameOverButtonOffset), "メニュー",
             new Color(0.5f, 0.5f, 0.5f), new Color(1f, 0.3f, 0.3f));
         gameOverButton.SetActive(false);
     }
@@ -334,7 +312,7 @@ void CreateStartButton()
         recordButton = MakeButton("RecordButton_" + gameObject.name, MenuButtonPos(0f), "記録",
             new Color(0.2f, 0.4f, 0.8f), new Color(0.4f, 0.7f, 1f));
         backButton = MakeButton("BackButton_" + gameObject.name,
-            initialPos + initialRot * (startButtonLocalOffset + backButtonLocalOffset), "もどる",
+            MenuCenter() + Off(backButtonOffset), "もどる",
             new Color(0.5f, 0.5f, 0.5f), new Color(1f, 1f, 1f));
         backButton.SetActive(false);
     }
@@ -343,7 +321,7 @@ void CreateStartButton()
 HoldButton MakeButton(string name, Vector3 pos, string label, Color idle, Color held)
     {
         // 向きは全ボタン共通（メニュー中心から頭への水平方向）にして、面を揃える
-        Vector3 center = initialPos + initialRot * startButtonLocalOffset;
+        Vector3 center = MenuCenter();
         Quaternion rot = Quaternion.LookRotation(-DirToHead(center), Vector3.up);
         return new HoldButton(name, pos, rot, new Vector2(menuButtonWidth, menuButtonHeight),
             label, recordsLabelCharSize * 1.3f, idle, held);
@@ -362,7 +340,6 @@ HoldButton MakeButton(string name, Vector3 pos, string label, Color idle, Color 
         if (settingsButton != null) settingsButton.SetActive(true);
         SetTextLayout(false);
         if (backButton != null) backButton.SetActive(false);
-        if (resetButtonTransform != null) resetButtonTransform.gameObject.SetActive(false);
         if (startButtonTransform != null) startButtonTransform.gameObject.SetActive(true);
         UpdateStatusText();
     }
@@ -382,7 +359,6 @@ void HandleStartButton()
     void StartGame()
     {
         if (startButtonTransform != null) startButtonTransform.gameObject.SetActive(false);
-        if (resetButtonTransform != null) resetButtonTransform.gameObject.SetActive(true);
         HideChoiceButtons();
         if (lr != null) lr.enabled = true;
         if (galleryRoot != null) galleryRoot.SetActive(false);
@@ -396,10 +372,25 @@ void HandleStartButton()
     }
 
 /// <summary>メニューボタンの位置。side=-0.5でスタート（左）、+0.5で記録（右）</summary>
-Vector3 MenuButtonPos(float row)
+/// <summary>メニュー座標のオフセットをワールドのずれに変換。X=右、Y=上、Z=奥（プレイヤーから遠ざかる向き）</summary>
+    Vector3 Off(Vector3 o)
+    {
+        Vector3 fwd = -DirToHead(initialPos);
+        fwd.y = 0f;
+        fwd = fwd.sqrMagnitude > 1e-6f ? fwd.normalized : Vector3.forward;
+        Vector3 right = Vector3.Cross(Vector3.up, fwd);
+        return right * o.x + Vector3.up * o.y + fwd * o.z;
+    }
+
+    Vector3 MenuCenter()
+    {
+        return initialPos + Off(menuOffset);
+    }
+
+    Vector3 MenuButtonPos(float row)
     {
         // 行は必ずワールドの真上方向にずらす（リング面が傾いていても、全ボタンの奥行きが同じになる）
-        Vector3 center = initialPos + initialRot * startButtonLocalOffset;
+        Vector3 center = MenuCenter();
         return center + Vector3.up * (menuRowSpacing * row);
     }
 
@@ -531,10 +522,10 @@ void BuildGallery()
         int count = PlayerPrefs.GetInt(KeyCount, 0);
 
         galleryRoot = new GameObject("TonboGallery");
-        galleryRoot.transform.SetPositionAndRotation(initialPos + initialRot * recordsGalleryLocalOffset, initialRot);
+        galleryRoot.transform.SetPositionAndRotation(initialPos + Off(recordsGalleryOffset), initialRot);
 
         // 「もどる」ボタンの説明（ボタンの右隣）
-        Vector3 backLocal = startButtonLocalOffset + backButtonLocalOffset - recordsGalleryLocalOffset;
+        Vector3 backLocal = Quaternion.Inverse(initialRot) * (MenuCenter() + Off(backButtonOffset) - galleryRoot.transform.position);
         // （「もどる」はボタン自体にラベルあり）
 
         if (count == 0)
@@ -736,11 +727,6 @@ void EnterChoose()
     }
 
     // ===== 設定画面（BGM・効果音・画面の明るさを、棒の先端でスライドして調整） =====
-    [Header("設定画面")]
-    [Tooltip("設定ボタン（オープニング画面）の位置：メニュー中心からのローカルオフセット（X=右, Y=奥行き, Z=上）")]
-    public Vector3 settingsButtonOffset = new Vector3(0f, 0f, -0.15f);
-    [Tooltip("設定画面のスライダー群の中心：メニュー中心からのローカルオフセット。「もどる」球と重ならないよう上に置く")]
-    public Vector3 settingsPanelOffset = new Vector3(0f, 0f, 0.34f);
     private HoldButton settingsButton;
     private SettingsPanel settingsPanel;
 
@@ -749,8 +735,14 @@ void InitSettings()
         if (settingsPanel != null) return;
         GameObject b = GameObject.Find("BGM");
         AudioSource bgm = (b != null) ? b.GetComponent<AudioSource>() : null;
-        settingsPanel = new SettingsPanel(initialPos + initialRot * (startButtonLocalOffset + settingsPanelOffset), initialRot,
-            bgm, audioSource, recordsLabelCharSize, backButtonLocalOffset - settingsPanelOffset, "");
+        Vector3 panelPos = initialPos + Off(settingsPanelOffset);
+        Vector3 toPlayer = DirToHead(panelPos);
+        toPlayer.y = 0f;
+        toPlayer = toPlayer.sqrMagnitude > 1e-6f ? toPlayer.normalized : Vector3.back;
+        // パネル内の座標: X=右、Y=手前（プレイヤー側）、Z=上。傾けず、メニューボタンと同じ向きで立てる
+        Quaternion panelRot = Quaternion.LookRotation(Vector3.up, toPlayer);
+        settingsPanel = new SettingsPanel(panelPos, panelRot, bgm, audioSource, recordsLabelCharSize,
+            Quaternion.Inverse(panelRot) * (MenuCenter() + Off(backButtonOffset) - panelPos), "");
         settingsButton = MakeButton("SettingsButton_" + gameObject.name, MenuButtonPos(-1f), "設定",
             new Color(0.8f, 0.5f, 0.1f), new Color(1f, 0.8f, 0.4f));
         settingsPanel.SetActive(false);
@@ -924,7 +916,7 @@ void InitSettings()
     }
 
     /// <summary>
-    /// 棒の先端がリセットボタンにresetHoldSeconds秒触れ続けたら、状態を問わず強制リセットする。
+    /// 棒の先端がゲームオーバー時のメニューボタンにstartHoldSeconds秒触れ続けたら、状態を問わず強制リセットする。
     /// ボタンの色を押し込み進捗に応じて変化させ、触れていない間は徐々に進捗を戻す。
     /// </summary>
 void HandleResetButton()
@@ -1167,7 +1159,6 @@ void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
         Vector3 toRing = initialPos - pivot;
         float r = new Vector2(toRing.x, toRing.z).magnitude;
 
-        float avoidReset = ringRadius + thicknesHalf + resetButtonRadius + 0.05f;
         float maxFromShoulder = reachRadius - ringRadius - thicknesHalf;
 
         Vector3 shoulder = Vector3.zero;
@@ -1199,16 +1190,15 @@ void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
             center = c;
             rot = yawRot * initialRot;
 
-            if (!IsValidSpawn(c, avoidReset)) continue;
+            if (!IsValidSpawn(c)) continue;
             if (hasHead && Vector3.Distance(c, shoulder) > maxFromShoulder) continue;
             break;
         }
     }
 
-    bool IsValidSpawn(Vector3 c, float avoidReset)
+    bool IsValidSpawn(Vector3 c)
     {
         if (Vector3.Distance(c, lastCenter) < minSpawnSeparation) return false;
-        if (resetButtonTransform != null && Vector3.Distance(c, resetButtonTransform.position) < avoidReset) return false;
         return true;
     }
 
@@ -1309,7 +1299,7 @@ void UpdateStatusText()
                 uiText.color = colorFail;
                 uiText.text = string.Format(
                     "ゲームオーバー\nスコア: {0}（ベスト {1}）\nメニューのボタンに触れ続けてね",
-                    score, bestScore, resetHoldSeconds);
+                    score, bestScore);
                 break;
         }
     }
