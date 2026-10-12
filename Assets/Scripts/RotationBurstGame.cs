@@ -120,6 +120,12 @@ public class RotationBurstGame : MonoBehaviour
     [Tooltip("縦に並べたボタンの間隔（メートル）。高さより少し大きくすること")]
     public float menuRowSpacing = 0.14f;
     private HoldButton startButton;
+    private HoldButton gameOverButton;
+    [Tooltip("ゲームオーバー時に出る「メニュー」ボタンの位置：メニュー中心からの行数（マイナスで下、1行=menuRowSpacing）")]
+    public float gameOverButtonRow = -1.5f;
+    [Tooltip("ボタンが反応した（長押し完了）ときに鳴らす音")]
+    public AudioClip buttonClip;
+
 
 
     [Header("表示設定")]
@@ -280,6 +286,9 @@ public class RotationBurstGame : MonoBehaviour
         audioSource.clip = sparkleClip;
         audioSource.loop = false;
         audioSource.playOnAwake = false;
+        HoldButton.pressSource = audioSource;
+        HoldButton.pressClip = buttonClip;
+
 
         UpdateLinePositions();
         SetColor(colorNormal);
@@ -309,26 +318,12 @@ public class RotationBurstGame : MonoBehaviour
         EnterTitle();
     }
 
-    void CreateResetButton()
+void CreateResetButton()
     {
-        GameObject btn = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        btn.name = "ResetButton_" + gameObject.name;
-        Destroy(btn.GetComponent<SphereCollider>());
-        btn.transform.SetParent(this.transform, false);
-        // リングと同じ平面上（ローカルY=0＝リングと同じ奥行き）の右上に配置。
-        // カメラの近くに浮かないようにするため、奥行き方向にはオフセットしない。
-        btn.transform.localPosition = new Vector3(resetButtonRightOffset, 0f, resetButtonUpOffset);
-        btn.transform.localScale = Vector3.one * resetButtonSize;
-
-        resetButtonRenderer = btn.GetComponent<Renderer>();
-        // "Standard"は実機ビルドでシェーダーが含まれずnullになることがあるため、
-        // LineRendererと同じ実機動作確認済みの"Sprites/Default"を使う。
-        resetButtonRenderer.material = new Material(Shader.Find("Sprites/Default"));
-        resetButtonRenderer.material.color = resetButtonColorIdle;
-
-        resetButtonTransform = btn.transform;
-        // リングはランダムに動くので、リセットボタンは初期位置（手が届く位置）に固定する
-        btn.transform.SetParent(null, true);
+        // ゲームオーバー時だけ出る、横長キューブの「メニュー」ボタン
+        gameOverButton = MakeButton("MenuButton_" + gameObject.name, MenuButtonPos(gameOverButtonRow), "メニュー",
+            new Color(0.5f, 0.5f, 0.5f), new Color(1f, 0.3f, 0.3f));
+        gameOverButton.SetActive(false);
     }
 
 void CreateStartButton()
@@ -932,35 +927,15 @@ void InitSettings()
     /// 棒の先端がリセットボタンにresetHoldSeconds秒触れ続けたら、状態を問わず強制リセットする。
     /// ボタンの色を押し込み進捗に応じて変化させ、触れていない間は徐々に進捗を戻す。
     /// </summary>
-    void HandleResetButton()
+void HandleResetButton()
     {
-        if (resetButtonTransform == null) return;
-
-        bool touchingButton = false;
-        if (tipTransform != null)
+        if (gameOverButton == null) return;
+        bool show = (state == GameState.Failed);
+        if (gameOverButton.t.gameObject.activeSelf != show) gameOverButton.SetActive(show);
+        if (!show) return;
+        if (gameOverButton.Tick(tipTransform, startButtonRadius, startHoldSeconds))
         {
-            float dist = Vector3.Distance(tipTransform.position, resetButtonTransform.position);
-            touchingButton = dist <= resetButtonRadius;
-        }
-
-        if (touchingButton)
-        {
-            resetHoldTimer += Time.deltaTime;
-        }
-        else
-        {
-            resetHoldTimer = Mathf.Max(0f, resetHoldTimer - Time.deltaTime * 2f); // 離すと少し早めに進捗が戻る
-        }
-
-        if (resetButtonRenderer != null)
-        {
-            float progress = Mathf.Clamp01(resetHoldTimer / resetHoldSeconds);
-            resetButtonRenderer.material.color = Color.Lerp(resetButtonColorIdle, resetButtonColorHeld, progress);
-        }
-
-        if (resetHoldTimer >= resetHoldSeconds)
-        {
-            resetHoldTimer = 0f;
+            gameOverButton.SetActive(false);
             ResetGame();
         }
     }
@@ -1333,7 +1308,7 @@ void UpdateStatusText()
             case GameState.Failed:
                 uiText.color = colorFail;
                 uiText.text = string.Format(
-                    "ゲームオーバー\nスコア: {0}（ベスト {1}）\nメニューボタンに{2}秒触れてメニューへ",
+                    "ゲームオーバー\nスコア: {0}（ベスト {1}）\nメニューのボタンに触れ続けてね",
                     score, bestScore, resetHoldSeconds);
                 break;
         }

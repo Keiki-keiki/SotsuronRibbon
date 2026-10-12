@@ -1001,7 +1001,7 @@ MonoBehaviour:
   resetButtonRadius: 0.09
   resetHoldSeconds: 2
   gameTitle: "\u30EA\u30F3\u30B0\u30B2\u30FC\u30E0"
-  startButtonLocalOffset: {x: 0, y: 0, z: 0}
+  startButtonLocalOffset: {x: 0, y: 0.5, z: 0.3}
   startButtonSize: 0.12
   startButtonRadius: 0.09
   startHoldSeconds: 2
@@ -1022,12 +1022,14 @@ MonoBehaviour:
   galleryViewYaw: 30
   galleryViewPitch: 20
   menuButtonGap: 0.3
-  backButtonLocalOffset: {x: 0, y: 0, z: 0}
+  backButtonLocalOffset: {x: 0, y: 0.3, z: 1}
   menuButtonWidth: 0.34
   menuButtonHeight: 0.1
   menuRowSpacing: 0.2
+  gameOverButtonRow: -1.5
+  buttonClip: {fileID: 8300000, guid: b213d010b9f4347ab9db47643b891ca4, type: 3}
   textLocalX: 0
-  textLocalY: 2
+  textLocalY: 3
   textFontSize: 36
   tipTransform: {fileID: 234781393}
   sparkleClip: {fileID: 0}

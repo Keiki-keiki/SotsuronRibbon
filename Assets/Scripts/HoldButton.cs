@@ -13,6 +13,11 @@ public class HoldButton
     private Color idle, held;
     private Vector2 half; // キューブの（幅/2, 高さ/2）
 
+    // 長押しが完了したときに鳴らす音（RotationBurstGameが設定する）
+    public static AudioSource pressSource;
+    public static AudioClip pressClip;
+
+
     public HoldButton(string name, Vector3 pos, Quaternion rot, Vector2 size, string label, float charSize, Color idle, Color held)
     {
         this.idle = idle;
@@ -77,6 +82,7 @@ public class HoldButton
         if (timer >= holdSeconds)
         {
             timer = 0f;
+            if (pressSource != null && pressClip != null) pressSource.PlayOneShot(pressClip);
             return true;
         }
         return false;
