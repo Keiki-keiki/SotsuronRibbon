@@ -189,6 +189,23 @@ public class RotationBurstGame : MonoBehaviour
     private enum GameState { Title, Settings, ChooseType, Records, Waiting, Playing, Cleared, Failed }
     private GameState state = GameState.Title;
     private GameObject titleLogo;
+    [Header("杭（トンボが止まる）")]
+    public int stakeCount = 7;
+    public float stakeRadius = 0.015f;
+    public Color stakeColor = new Color(0.40f, 0.28f, 0.18f);
+    private Transform stakeRoot;
+    private readonly List<Vector3> stakeCenters = new List<Vector3>();
+    private readonly List<Quaternion> stakeRots = new List<Quaternion>();
+    private int lastStakeIndex = -1;
+    [Tooltip("杭のモデル（Tonbo_Stake.fbx）。未設定なら円柱で代用")]
+    public GameObject stakePrefab;
+    public float stakeModelLength = 1.0f;
+    [Tooltip("杭どうしの最小間隔（m）。大きいほどバラけて立つ")]
+    public float stakeMinSpacing = 0.28f;
+    private bool ringHiddenForLanding = false;
+    [Tooltip("トンボが杭に向かって飛んで着地するまでの秒数（着地するまでなぞり判定は始まらない）")]
+    public float tonboFlightSeconds = 2f;
+    private float tonboFlightStartTime = 0f;
 
     private float lastAngle = float.NaN;
     private float cumulativeAngle = 0f;
@@ -441,6 +458,7 @@ void HandleStartButton()
         if (backButton != null) backButton.SetActive(false);
         score = 0;
         ResetRingProgress();
+        { Vector3 sc; Quaternion sr; ChooseStakePose(out sc, out sr); transform.SetPositionAndRotation(sc, sr); lastCenter = sc; UpdateLinePositions(); }
         state = GameState.Waiting;
         SetColor(colorNormal);
         UpdateStatusText();
@@ -863,6 +881,18 @@ void InitSettings()
         // タイトル画面のときだけ Libel Spiral ロゴを表示する
         if (titleLogo == null) titleLogo = GameObject.Find("LibelSpiralLogo");
         if (titleLogo != null) { bool showLogo = (state == GameState.Title); if (titleLogo.activeSelf != showLogo) titleLogo.SetActive(showLogo); }
+        if (stakeRoot != null) { bool showStakes = (state == GameState.Waiting || state == GameState.Playing || state == GameState.Cleared || state == GameState.Failed); if (stakeRoot.gameObject.activeSelf != showStakes) stakeRoot.gameObject.SetActive(showStakes); }
+        // トンボが杭に着地するまでは、リング（円）を表示しない
+        if (lr != null)
+        {
+            bool waitLanding = (state == GameState.Waiting && tonboPrefab != null && !(tonboRunning && Time.time - tonboFlightStartTime >= tonboFlightSeconds));
+            if (waitLanding) { if (lr.enabled) { lr.enabled = false; ringHiddenForLanding = true; } }
+            else if (ringHiddenForLanding)
+            {
+                ringHiddenForLanding = false;
+                if (state == GameState.Waiting || state == GameState.Playing) lr.enabled = true;
+            }
+        }
         if (!ready) return;
         // リセットボタンは状態に関係なく常にチェックする（いつでも強制リセット可能）
         // 記録画面：「もどる」ボタンに触れ続けたらオープニング画面へ
@@ -929,6 +959,13 @@ void InitSettings()
         if (tipTransform == null)
         {
             UpdateStatusText();
+            return;
+        }
+
+        // トンボが杭に着地するまでは、なぞり判定を始めない
+        if (state == GameState.Waiting && tonboPrefab != null && !(tonboRunning && Time.time - tonboFlightStartTime >= tonboFlightSeconds))
+        {
+            lastAngle = float.NaN;
             return;
         }
 
@@ -1117,6 +1154,7 @@ void StartTonbo()
         tonboInstance.transform.SetPositionAndRotation(tonboStart, Quaternion.LookRotation(toPlayer, Vector3.up));
         ApplyTonboColors();
         tonboInstance.SetActive(true);
+        tonboFlightStartTime = Time.time;
         tonboRunning = true;
     }
 
@@ -1195,16 +1233,16 @@ void StartTonbo()
     {
         if (tonboPrefab == null) return;
 
-        if (state == GameState.Playing && !tonboRunning && !float.IsNaN(sessionStartTime))
+        if ((state == GameState.Waiting || state == GameState.Playing) && !tonboRunning)
         {
             StartTonbo();
         }
         if (!tonboRunning || tonboInstance == null) return;
 
-        if (state == GameState.Playing && !float.IsNaN(sessionStartTime))
+        if (state == GameState.Waiting || state == GameState.Playing)
         {
-            // 制限時間いっぱいかけて円の中心に到達する
-            float t = Mathf.Clamp01((Time.time - sessionStartTime) / sessionTimeLimit);
+            // 杭に向かって飛び、着地したらその場に止まる
+            float t = Mathf.Clamp01((Time.time - tonboFlightStartTime) / Mathf.Max(0.1f, tonboFlightSeconds));
             Vector3 dir = (tonboEnd - tonboStart).normalized;
             Vector3 side = Vector3.Cross(dir, Vector3.up).normalized;
             float w = tonboWobble * (1f - t);
@@ -1225,7 +1263,7 @@ void StartTonbo()
     {
         Vector3 center;
         Quaternion rot;
-        ChooseSpawnPose(out center, out rot);
+        ChooseStakePose(out center, out rot);
 
         transform.SetPositionAndRotation(center, rot);
         lastCenter = center;
@@ -1298,6 +1336,71 @@ void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
             if (hasHead && Vector3.Distance(c, shoulder) > maxFromShoulder) continue;
             break;
         }
+    }
+
+    // ===== 杭（トンボが止まる場所）=====
+    void BuildStakes()
+    {
+        if (stakeRoot != null) return;
+        stakeRoot = new GameObject("TonboStakes").transform;
+        Vector3 savedLast = lastCenter;
+        for (int n = 0; n < stakeCount; n++)
+        {
+            Vector3 c = initialPos; Quaternion r = initialRot;
+            float bestMin = -1f;
+            for (int t = 0; t < 200; t++)
+            {
+                Vector3 cc; Quaternion rr;
+                ChooseSpawnPose(out cc, out rr);
+                float minD = float.MaxValue;
+                for (int k = 0; k < stakeCenters.Count; k++) minD = Mathf.Min(minD, Vector3.Distance(cc, stakeCenters[k]));
+                if (minD > bestMin) { bestMin = minD; c = cc; r = rr; }
+                if (minD >= stakeMinSpacing) break;
+            }
+            stakeCenters.Add(c); stakeRots.Add(r);
+            float perchY = c.y - 0.04f; // 杭の先端（トンボの体の少し下）
+            float floorY = Mathf.Min(0f, perchY - 0.3f);
+            RaycastHit hit;
+            if (Physics.Raycast(new Vector3(c.x, perchY, c.z), Vector3.down, out hit, 10f, ~0, QueryTriggerInteraction.Ignore)) floorY = hit.point.y;
+            float len = Mathf.Max(0.3f, perchY - floorY);
+            GameObject go;
+            if (stakePrefab != null)
+            {
+                go = Instantiate(stakePrefab);
+                go.name = "Stake" + n;
+                go.transform.SetParent(stakeRoot, false);
+                float yScale = len / Mathf.Max(0.01f, stakeModelLength);
+                go.transform.SetPositionAndRotation(new Vector3(c.x, perchY, c.z), Quaternion.Euler(0f, Random.Range(0f, 360f), 0f));
+                go.transform.localScale = new Vector3(1f, yScale, 1f);
+                Transform rope = go.transform.Find("Tonbo_Stake_Rope");
+                if (rope != null) { rope.localScale = new Vector3(1f, 1f / yScale, 1f); rope.localPosition = new Vector3(0f, -0.09f / yScale, 0f); }
+                foreach (Collider col in go.GetComponentsInChildren<Collider>()) Destroy(col);
+            }
+            else
+            {
+            go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            go.name = "Stake" + n;
+            Destroy(go.GetComponent<Collider>());
+            go.transform.SetParent(stakeRoot, false);
+            go.transform.position = new Vector3(c.x, perchY - len * 0.5f, c.z);
+            go.transform.localScale = new Vector3(stakeRadius * 2f, len * 0.5f, stakeRadius * 2f);
+            Renderer rend = go.GetComponent<Renderer>();
+            if (rend.material.HasProperty("_BaseColor")) rend.material.SetColor("_BaseColor", stakeColor);
+            if (rend.material.HasProperty("_Color")) rend.material.color = stakeColor;
+            }
+        }
+        lastCenter = savedLast;
+    }
+
+    /// <summary>ランダムな杭を1本選び、その先端（トンボが止まる位置）をリングの中心にする</summary>
+    void ChooseStakePose(out Vector3 center, out Quaternion rot)
+    {
+        BuildStakes();
+        int idx = Random.Range(0, stakeCenters.Count);
+        int guard = 0;
+        while (idx == lastStakeIndex && stakeCenters.Count > 1 && guard++ < 20) idx = Random.Range(0, stakeCenters.Count);
+        lastStakeIndex = idx;
+        center = stakeCenters[idx]; rot = stakeRots[idx];
     }
 
     bool IsValidSpawn(Vector3 c)
