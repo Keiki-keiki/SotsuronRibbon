@@ -188,6 +188,7 @@ public class RotationBurstGame : MonoBehaviour
 
     private enum GameState { Title, Settings, ChooseType, Records, Waiting, Playing, Cleared, Failed }
     private GameState state = GameState.Title;
+    private GameObject titleLogo;
 
     private float lastAngle = float.NaN;
     private float cumulativeAngle = 0f;
@@ -254,6 +255,40 @@ public class RotationBurstGame : MonoBehaviour
         yield return AlignPlayerSpace();
         InitGame();
         ready = true;
+        SubscribeRecenter();
+    }
+
+    // ---- 再センタリング対応 ----
+    // Quest本体の「親指と人差し指をつまんで長押し」(位置リセット)をすると、トラッキング原点が動いて
+    // ワールド固定のメニューが背後に回ってしまう。リセット直後にプレイヤー空間を合わせ直して、メニューを正面に戻す。
+    private bool recenterSubscribed;
+    private bool realigning;
+
+    void SubscribeRecenter()
+    {
+        if (recenterSubscribed || OVRManager.display == null) return;
+        OVRManager.display.RecenteredPose += OnRecentered;
+        recenterSubscribed = true;
+    }
+
+    void OnDestroy()
+    {
+        if (recenterSubscribed && OVRManager.display != null)
+            OVRManager.display.RecenteredPose -= OnRecentered;
+        recenterSubscribed = false;
+    }
+
+    void OnRecentered()
+    {
+        if (!realigning && isActiveAndEnabled) StartCoroutine(RealignAfterRecenter());
+    }
+
+    System.Collections.IEnumerator RealignAfterRecenter()
+    {
+        realigning = true;
+        yield return null; // 新しい原点でのトラッキングが反映されるのを1フレーム待つ
+        yield return AlignPlayerSpace();
+        realigning = false;
     }
 
     System.Collections.IEnumerator AlignPlayerSpace()
@@ -825,6 +860,9 @@ void InitSettings()
 
     void Update()
     {
+        // タイトル画面のときだけ Libel Spiral ロゴを表示する
+        if (titleLogo == null) titleLogo = GameObject.Find("LibelSpiralLogo");
+        if (titleLogo != null) { bool showLogo = (state == GameState.Title); if (titleLogo.activeSelf != showLogo) titleLogo.SetActive(showLogo); }
         if (!ready) return;
         // リセットボタンは状態に関係なく常にチェックする（いつでも強制リセット可能）
         // 記録画面：「もどる」ボタンに触れ続けたらオープニング画面へ
