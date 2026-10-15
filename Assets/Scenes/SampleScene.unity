@@ -600,7 +600,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 5f808d61123e74887a1a041fce8479d9, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0
+      value: -0.04
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 5f808d61123e74887a1a041fce8479d9, type: 3}
       propertyPath: m_LocalPosition.z
@@ -1023,6 +1023,8 @@ GameObject:
   - component: {fileID: 827056173}
   - component: {fileID: 827056174}
   - component: {fileID: 827056175}
+  - component: {fileID: 827056176}
+  - component: {fileID: 827056177}
   m_Layer: 0
   m_Name: RingTarget
   m_TagString: Untagged
@@ -1062,17 +1064,7 @@ MonoBehaviour:
   burstWindowSeconds: 1
   rotationsPerBurst: 4
   requiredBursts: 3
-  startHoldSeconds: 2
-  menuButtonWidth: 0.34
-  menuButtonHeight: 0.1
-  menuRowSpacing: 0.2
   referenceHeadHeight: 1.3
-  menuOffset: {x: 0, y: 0.3, z: 0.1}
-  backButtonOffset: {x: 0, y: 0.4, z: 0.1}
-  gameOverButtonOffset: {x: 0, y: -0.3, z: 0.1}
-  settingsPanelOffset: {x: 0, y: 0.3, z: 0.1}
-  recordsGalleryOffset: {x: 0.4, y: 0.3, z: 0.1}
-  buttonClip: {fileID: 8300000, guid: b213d010b9f4347ab9db47643b891ca4, type: 3}
   textLocalX: 0
   textLocalY: 3
   tipTransform: {fileID: 234781393}
@@ -1125,6 +1117,40 @@ MonoBehaviour:
   tonboCutePrefab: {fileID: 2886361281245197118, guid: 77759bbc3d6be4fe3a42a535a16d3974, type: 3}
   tonboForceRandomColor: 0
   tonboFlightSeconds: 2
+--- !u!114 &827056176
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 827056170}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f379c89ff70b74db990c310dbab3f0e3, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  galleryOffset: {x: 0.4, y: 0.3, z: 0.1}
+--- !u!114 &827056177
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 827056170}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2bb707442e6fc43dcbec4d348abd5637, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  menuButtonWidth: 0.34
+  menuButtonHeight: 0.1
+  menuRowSpacing: 0.2
+  menuOffset: {x: 0, y: 0.3, z: 0.1}
+  backButtonOffset: {x: 0, y: 0.4, z: 0.1}
+  gameOverButtonOffset: {x: 0, y: -0.3, z: 0.1}
+  settingsPanelOffset: {x: 0, y: 0.3, z: 0.1}
+  buttonClip: {fileID: 8300000, guid: b213d010b9f4347ab9db47643b891ca4, type: 3}
+  startHoldSeconds: 2
 --- !u!1 &883267041
 GameObject:
   m_ObjectHideFlags: 0
