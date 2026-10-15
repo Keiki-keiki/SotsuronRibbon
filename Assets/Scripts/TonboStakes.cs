@@ -28,7 +28,9 @@ public class TonboStakes : MonoBehaviour
     [Tooltip("杭を木の足場(Mesh_Wood)から離す距離（m）。杭は水面の上にだけ立つ")]
     public float stakeWoodMargin = 0.3f;
     [Tooltip("杭の奥行き方向のばらつき（±m）")]
-    public float stakeDepthJitter = 0.25f;
+    public float stakeDepthJitter = 0.1f;
+    [Tooltip("杭の前後（奥行き）方向の広がり倍率。手前（初期位置の奥行き）を基準に、1より小さいほど前後が狭まる。左右はstakeSpreadのまま")]
+    public float stakeDepthSpread = 0.4f;
 
     private RotationBurstGame game;
     private Transform stakeRoot;
@@ -128,7 +130,7 @@ public class TonboStakes : MonoBehaviour
             {
                 Vector3 cc; Quaternion rr;
                 game.ChooseSpawnPose(out cc, out rr);
-                { Vector3 dh = cc - initialPos; dh.y = 0f; cc += shift + dh * (stakeSpread - 1f); cc += game.Off(new Vector3(0f, 0f, Random.Range(-stakeDepthJitter, stakeDepthJitter))); }
+                { Vector3 dh = cc - initialPos; dh.y = 0f; Vector3 fw = game.Off(Vector3.forward); fw.y = 0f; fw = fw.normalized; float dd = Vector3.Dot(dh, fw); Vector3 lat = dh - fw * dd; cc += shift + lat * (stakeSpread - 1f) + fw * (dd * (stakeDepthSpread - 1f)); cc += fw * Random.Range(0f, stakeDepthJitter); } // 前後は手前基準で狭める（ばらつきは奥側のみ）
                 if (OnWood(cc)) continue;
                 { Vector3 dp = playerAfter - cc; rr = Quaternion.Euler(0f, Mathf.Atan2(dp.x, dp.z) * Mathf.Rad2Deg - 180f, 0f) * initialRot; }
                 float minD = float.MaxValue;

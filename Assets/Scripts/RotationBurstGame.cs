@@ -177,6 +177,10 @@ public class RotationBurstGame : MonoBehaviour
     private float dbgDistFromRing = 0f;
     private bool dbgHasTip = false;
     private float flashUntil = -1f;
+    [Header("ゲームオーバー")]
+    [Tooltip("ゲームオーバーになってから、自動でメニューに戻るまでの時間（秒）")]
+    public float gameOverReturnSeconds = 3f;
+    private float failedTime = 0f;
 
     System.Collections.IEnumerator Start()
     {
@@ -505,7 +509,6 @@ void EnterSettings()
             return;
         }
 
-        HandleResetButton();
         tonbo.Tick();
 
         if (state == GameState.Cleared)
@@ -518,6 +521,7 @@ void EnterSettings()
 
         if (state == GameState.Failed)
         {
+            if (Time.time - failedTime >= gameOverReturnSeconds) { ResetGame(); return; } // 一定時間後に自動でメニューへ（プレイヤー位置も初期位置に戻る）
             SetColor(colorFail);
             UpdateStatusText();
             return;
@@ -627,11 +631,7 @@ void EnterSettings()
     /// 棒の先端がゲームオーバー時のメニューボタンに触れ続けたら、強制リセットする（ボタンの実体は GameMenuUI）。
     /// ボタンの色を押し込み進捗に応じて変化させ、触れていない間は徐々に進捗を戻す。
     /// </summary>
-void HandleResetButton()
-    {
-        // ゲームオーバー時だけ出る「メニュー」ボタンに触れ続けたら、強制リセットしてオープニングへ戻る
-        if (menu.TickGameOver(state == GameState.Failed, tipTransform)) ResetGame();
-    }
+
 
     void CheckTimeout()
     {
@@ -641,6 +641,7 @@ void HandleResetButton()
         if (elapsed >= sessionTimeLimit && burstCount < requiredBursts)
         {
             state = GameState.Failed;
+            failedTime = Time.time;
         }
     }
 
@@ -862,8 +863,8 @@ void UpdateStatusText()
             case GameState.Failed:
                 uiText.color = colorFail;
                 uiText.text = string.Format(
-                    "ゲームオーバー\nスコア: {0}（ベスト {1}）\nメニューのボタンに触れ続けてね",
-                    score, bestScore);
+                    "ゲームオーバー\nスコア: {0}（ベスト {1}）\\n{2}秒後にメニューに戻ります",
+                    score, bestScore, gameOverReturnSeconds);
                 break;
         }
     }
