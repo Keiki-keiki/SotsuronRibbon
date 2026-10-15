@@ -197,11 +197,29 @@ public class RotationBurstGame : MonoBehaviour
     private readonly List<Vector3> stakeCenters = new List<Vector3>();
     private readonly List<Quaternion> stakeRots = new List<Quaternion>();
     private int lastStakeIndex = -1;
+    [Tooltip("水面の高さ（Mesh_Waterが見つかれば自動で上書き）")]
+    public float waterSurfaceY = -0.5f;
+    [Tooltip("杭を水面より下に沈める深さ（m）")]
+    public float stakeSinkDepth = 0.3f;
+    private bool waterFound = false;
+    [Tooltip("プレイ開始時にプレイヤーを前（水面の杭の方）へ出す距離（m）。杭もこの分だけ前に立つ")]
+    public float playerAdvanceMeters = 1.6f;
+    [Tooltip("杭の広がり倍率（左右・奥行き）。大きいほど杭どうしが離れる")]
+    public float stakeSpread = 1.8f;
+    private bool playerAdvanced = false;
+    private Vector3 stakeShiftVec = Vector3.zero;
+    private bool woodFound = false;
+    private bool hasWood = false;
+    private Bounds woodBounds;
     [Tooltip("杭のモデル（Tonbo_Stake.fbx）。未設定なら円柱で代用")]
     public GameObject stakePrefab;
     public float stakeModelLength = 1.0f;
     [Tooltip("杭どうしの最小間隔（m）。大きいほどバラけて立つ")]
-    public float stakeMinSpacing = 0.28f;
+    public float stakeMinSpacing = 0.6f;
+    [Tooltip("杭を木の足場(Mesh_Wood)から離す距離（m）。杭は水面の上にだけ立つ")]
+    public float stakeWoodMargin = 0.3f;
+    [Tooltip("杭の奥行き方向のばらつき（±m）")]
+    public float stakeDepthJitter = 0.25f;
     private bool ringHiddenForLanding = false;
     [Tooltip("トンボが杭に向かって飛んで着地するまでの秒数（着地するまでなぞり判定は始まらない）")]
     public float tonboFlightSeconds = 2f;
@@ -334,6 +352,7 @@ public class RotationBurstGame : MonoBehaviour
             rig.transform.RotateAround(head.position, Vector3.up, -Quaternion.LookRotation(f).eulerAngles.y);
         Vector3 p = head.position;
         rig.transform.position += new Vector3(-p.x, referenceHeadHeight - p.y, -p.z);
+        if (playerAdvanced) rig.transform.position += stakeShiftVec;
     }
 
     void InitGame()
@@ -422,6 +441,7 @@ HoldButton MakeButton(string name, Vector3 pos, string label, Color idle, Color 
     /// <summary>オープニング画面に入る：リングとリセットボタンを隠し、スタートボタンを表示する</summary>
     void EnterTitle()
     {
+AdvancePlayer(false);
         state = GameState.Title;
         startHoldTimer = 0f;
         if (lr != null) lr.enabled = false;
@@ -456,6 +476,7 @@ void HandleStartButton()
         if (galleryRoot != null) galleryRoot.SetActive(false);
         if (recordButton != null) recordButton.SetActive(false);
         if (backButton != null) backButton.SetActive(false);
+        AdvancePlayer(true);
         score = 0;
         ResetRingProgress();
         { Vector3 sc; Quaternion sr; ChooseStakePose(out sc, out sr); transform.SetPositionAndRotation(sc, sr); lastCenter = sc; UpdateLinePositions(); }
@@ -881,7 +902,7 @@ void InitSettings()
         // タイトル画面のときだけ Libel Spiral ロゴを表示する
         if (titleLogo == null) titleLogo = GameObject.Find("LibelSpiralLogo");
         if (titleLogo != null) { bool showLogo = (state == GameState.Title); if (titleLogo.activeSelf != showLogo) titleLogo.SetActive(showLogo); }
-        if (stakeRoot != null) { bool showStakes = (state == GameState.Waiting || state == GameState.Playing || state == GameState.Cleared || state == GameState.Failed); if (stakeRoot.gameObject.activeSelf != showStakes) stakeRoot.gameObject.SetActive(showStakes); }
+        if (ready && stakeRoot == null) BuildStakes(); // 杭は最初から水辺に立てておく（常時表示）
         // トンボが杭に着地するまでは、リング（円）を表示しない
         if (lr != null)
         {
@@ -1136,6 +1157,7 @@ void StartTonbo()
         // 水平方向だけにして、真っ直ぐ（上下に傾かず）飛んでくるようにする
         Vector3 flat = Vector3.ProjectOnPlane(toPlayer, Vector3.up);
         if (flat.sqrMagnitude > 0.01f) toPlayer = flat.normalized;
+        if (head != null) { Vector3 hp = head.position - transform.position; hp.y = 0f; if (hp.sqrMagnitude > 0.01f) toPlayer = hp.normalized; }
 
         // 位置の座標だけ円の中心に合わせる
         tonboEnd = transform.position;
@@ -1239,6 +1261,13 @@ void StartTonbo()
         }
         if (!tonboRunning || tonboInstance == null) return;
 
+        // トンボが杭に着地したら（何回目でも）カウントスタート
+        if (state == GameState.Waiting && Time.time - tonboFlightStartTime >= tonboFlightSeconds)
+        {
+            state = GameState.Playing;
+            sessionStartTime = Time.time;
+        }
+
         if (state == GameState.Waiting || state == GameState.Playing)
         {
             // 杭に向かって飛び、着地したらその場に止まる
@@ -1271,15 +1300,7 @@ void StartTonbo()
         ResetRingProgress();
         SetColor(colorNormal);
 
-        if (timerStartsOnSpawn)
-        {
-            state = GameState.Playing;
-            sessionStartTime = Time.time;
-        }
-        else
-        {
-            state = GameState.Waiting;
-        }
+        state = GameState.Waiting; // トンボが杭に止まったらカウントスタート（UpdateTonboで開始）
     }
 
     /// <summary>
@@ -1339,11 +1360,66 @@ void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
     }
 
     // ===== 杭（トンボが止まる場所）=====
+    // 木の足場（Mesh_Wood）の上は杭を立てない
+    bool OnWood(Vector3 p)
+    {
+        if (!woodFound)
+        {
+            GameObject w = GameObject.Find("Mesh_Wood");
+            Renderer wr = (w != null) ? w.GetComponent<Renderer>() : null;
+            if (wr != null) { woodBounds = wr.bounds; hasWood = true; }
+            woodFound = true;
+        }
+        if (!hasWood) return false;
+        float m = stakeWoodMargin;
+        return p.x > woodBounds.min.x - m && p.x < woodBounds.max.x + m && p.z > woodBounds.min.z - m && p.z < woodBounds.max.z + m;
+    }
+
+    Vector3 StakeShift()
+    {
+        // 杭は水面の上だけに立てる。プレイヤーは木の足場の端まで前に出て、水面の杭に手が届くようにする
+        float d = playerAdvanceMeters;
+        OnWood(initialPos); // woodBoundsを読み込む
+        if (hasWood)
+        {
+            Vector3 fwd = -DirToHead(initialPos); fwd.y = 0f;
+            fwd = fwd.sqrMagnitude > 1e-6f ? fwd.normalized : Vector3.forward;
+            Vector3 target = new Vector3(initialPos.x, 0f, woodBounds.max.z + stakeWoodMargin + 0.3f);
+            Vector3 from = new Vector3(initialPos.x, 0f, initialPos.z);
+            d = Mathf.Max(d, Vector3.Dot(target - from, fwd));
+        }
+        return Off(new Vector3(0f, 0f, d));
+    }
+
+    // プレイ開始で前へ出る／タイトルに戻ると元の位置へ戻る
+    void AdvancePlayer(bool forward)
+    {
+        OVRCameraRig rig = Object.FindObjectOfType<OVRCameraRig>();
+        if (rig == null) return;
+        if (forward && !playerAdvanced) { rig.transform.position += stakeShiftVec; playerAdvanced = true; }
+        else if (!forward && playerAdvanced) { rig.transform.position -= stakeShiftVec; playerAdvanced = false; }
+    }
+
+    float GetWaterY()
+    {
+        if (!waterFound)
+        {
+            GameObject w = GameObject.Find("Mesh_Water");
+            if (w != null) { Renderer wr = w.GetComponent<Renderer>(); waterSurfaceY = (wr != null) ? wr.bounds.max.y : w.transform.position.y; }
+            waterFound = true;
+        }
+        return waterSurfaceY;
+    }
+
     void BuildStakes()
     {
         if (stakeRoot != null) return;
         stakeRoot = new GameObject("TonboStakes").transform;
         Vector3 savedLast = lastCenter;
+        Vector3 shift = StakeShift();
+        stakeShiftVec = shift;
+        Transform hd = headTransform != null ? headTransform : (Camera.main != null ? Camera.main.transform : null);
+        Vector3 playerAfter = (hd != null ? hd.position : Vector3.zero) + shift;
         for (int n = 0; n < stakeCount; n++)
         {
             Vector3 c = initialPos; Quaternion r = initialRot;
@@ -1352,16 +1428,18 @@ void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
             {
                 Vector3 cc; Quaternion rr;
                 ChooseSpawnPose(out cc, out rr);
+                { Vector3 dh = cc - initialPos; dh.y = 0f; cc += shift + dh * (stakeSpread - 1f); cc += Off(new Vector3(0f, 0f, Random.Range(-stakeDepthJitter, stakeDepthJitter))); }
+                if (OnWood(cc)) continue;
+                { Vector3 dp = playerAfter - cc; rr = Quaternion.Euler(0f, Mathf.Atan2(dp.x, dp.z) * Mathf.Rad2Deg - 180f, 0f) * initialRot; }
                 float minD = float.MaxValue;
                 for (int k = 0; k < stakeCenters.Count; k++) minD = Mathf.Min(minD, Vector3.Distance(cc, stakeCenters[k]));
                 if (minD > bestMin) { bestMin = minD; c = cc; r = rr; }
                 if (minD >= stakeMinSpacing) break;
             }
+            if (bestMin < 0f) c = initialPos + shift;
             stakeCenters.Add(c); stakeRots.Add(r);
             float perchY = c.y - 0.04f; // 杭の先端（トンボの体の少し下）
-            float floorY = Mathf.Min(0f, perchY - 0.3f);
-            RaycastHit hit;
-            if (Physics.Raycast(new Vector3(c.x, perchY, c.z), Vector3.down, out hit, 10f, ~0, QueryTriggerInteraction.Ignore)) floorY = hit.point.y;
+            float floorY = GetWaterY() - stakeSinkDepth; // 水面の下まで立てる
             float len = Mathf.Max(0.3f, perchY - floorY);
             GameObject go;
             if (stakePrefab != null)
