@@ -151,28 +151,9 @@ public class RotationBurstGame : MonoBehaviour
     [Tooltip("true: リング出現と同時に制限時間スタート / false: なぞり始めてからスタート")]
     private bool timerStartsOnSpawn = true;
 
-    [Header("トンボ演出")]
-    [Tooltip("円に迫ってくるトンボのPrefab（Assets/Tonbo/Tonbo.prefab）")]
-    public GameObject tonboPrefab;
-    [Tooltip("キュート版トンボのPrefab（Assets/Tonbo/Tonbo_cute.prefab）。選ぶとTonboと全く同じ処理で動く")]
-    public GameObject tonboCutePrefab;
-    [Tooltip("トンボの大きさ（元モデルは翼を広げて約3.9mなので、0.08で約0.3m）")]
-    private float tonboScale = 0.08f;
-    [Tooltip("円の奥（プレイヤーと反対側）にどれだけ離れた位置から飛んでくるか（メートル）")]
-    private float tonboStartDistance = 2f;
-    [Tooltip("飛んでくる途中の上下左右のゆらぎの大きさ（メートル）")]
-    private float tonboWobble = 0.04f;
-    [Tooltip("トンボの色がランダムになる確率（0.001 = 0.1%）。トンボが出現するたびに抽選")]
-    [Range(0f, 1f)]
-    private float tonboRandomColorChance = 0.01f;
-    [Tooltip("デバッグ用：trueにすると毎回ランダム色になる（確認後はfalseに戻すこと）")]
-    public bool tonboForceRandomColor = false;
-    [Tooltip("大きさのばらつき（対数正規分布のσ）。0で全部同じ大きさ。0.25なら約68%が×0.78〜×1.28、約95%が×0.61〜×1.65")]
-    private float tonboSizeSigma = 0.25f;
-    [Tooltip("大きさの倍率の下限（極端に小さくなりすぎないように）")]
-    private float tonboSizeMinMultiplier = 0.4f;
-    [Tooltip("大きさの倍率の上限（極端に大きくなりすぎないように）")]
-    private float tonboSizeMaxMultiplier = 2.5f;
+    // トンボ処理は TonboController.cs に分離。以下は記録・ギャラリー用の参照（読み取り専用）
+    private GameObject tonboPrefab { get { return tonbo != null ? tonbo.CurrentPrefab : null; } }
+    private float tonboScale { get { return tonbo != null ? tonbo.BaseScale : 0f; } }
 
     private LineRenderer lr;
     private AudioSource audioSource;
@@ -190,11 +171,9 @@ public class RotationBurstGame : MonoBehaviour
     private GameState state = GameState.Title;
     private GameObject titleLogo;
     private TonboStakes stakes; // 杭の生成・配置・プレイヤー前進は TonboStakes.cs に分離
+    private TonboController tonbo; // トンボの出現・飛行・色/大きさは TonboController.cs に分離
     private bool ringHiddenForLanding = false;
-    [Header("着地演出")]
-    [Tooltip("トンボが杭に向かって飛んで着地するまでの秒数（着地するまでなぞり判定は始まらない）")]
-    public float tonboFlightSeconds = 2f;
-    private float tonboFlightStartTime = 0f;
+    // 着地演出の設定（tonboFlightSeconds等）は TonboController に移動
 
     private float lastAngle = float.NaN;
     private float cumulativeAngle = 0f;
@@ -221,8 +200,8 @@ public class RotationBurstGame : MonoBehaviour
     private string KeyMaxColors { get { return "Tonbo_MaxColors" + Sfx; } } // 最大個体の配色（空=通常色）
     private string KeyMinColors { get { return "Tonbo_MinColors" + Sfx; } } // 最小個体の配色（空=通常色）
 
-    private float currentTonboScale = 0f;
-    private readonly List<Color> currentVariantColors = new List<Color>();
+    private float currentTonboScale { get { return tonbo != null ? tonbo.CurrentScale : 0f; } }
+    private List<Color> currentVariantColors { get { return tonbo.VariantColors; } }
     private GameObject galleryRoot;
     private HoldButton recordButton;
     private HoldButton backButton;
@@ -249,14 +228,7 @@ public class RotationBurstGame : MonoBehaviour
     /// <summary>トンボが着地したら呼ぶ。なぞり判定とカウントを開始する</summary>
     public void BeginPlaying() { state = GameState.Playing; sessionStartTime = Time.time; }
 
-    // トンボ
-    private GameObject tonboInstance;
-    private bool tonboRunning = false;
-    private Vector3 tonboStart;
-    private Vector3 tonboEnd;
-    private Renderer[] tonboRenderers;
-    private Material[][] tonboOriginalMats;
-    private readonly List<Material> tonboTempMats = new List<Material>();
+    // トンボの実行時状態は TonboController に移動
 
     // デバッグ表示用（原因切り分け後に削除してよい）
     private float dbgLocalY = 0f;
@@ -271,6 +243,12 @@ public class RotationBurstGame : MonoBehaviour
         {
             Debug.LogWarning("[RotationBurstGame] TonboStakes が見つからないため、初期値で追加します。Inspectorでアタッチして値を設定してください。");
             stakes = gameObject.AddComponent<TonboStakes>();
+        }
+        tonbo = GetComponent<TonboController>();
+        if (tonbo == null)
+        {
+            Debug.LogWarning("[RotationBurstGame] TonboController が見つからないため、初期値で追加します。Inspectorでアタッチして値を設定してください。");
+            tonbo = gameObject.AddComponent<TonboController>();
         }
         // 頭の位置が取れるまで待ち、立ち位置・向き・身長に関係なく、毎回同じ位置関係でゲームを置く
         yield return AlignPlayerSpace();
@@ -344,7 +322,7 @@ public class RotationBurstGame : MonoBehaviour
     void InitGame()
     {
         initialPos = transform.position;
-        realPrefab = tonboPrefab;
+        // リアル版Prefabの保持は TonboController 側で行う
         SetMode(PlayerPrefs.GetInt("Tonbo_CuteMode", 0) == 1);
         initialRot = transform.rotation;
         lastCenter = initialPos;
@@ -533,7 +511,7 @@ void HandleStartButton()
     /// <summary>円をクリアした瞬間に、今のトンボの色・大きさを記録する</summary>
 void RecordCaught()
     {
-        if (tonboInstance == null || !tonboRunning) return;
+        if (!tonbo.IsActive) return;
 
         float size = currentTonboScale * tonboModelSpanMeters;
         int count = PlayerPrefs.GetInt(KeyCount, 0);
@@ -776,7 +754,7 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
 
 
     // ===== トンボのタイプ選択（リアル / キュート） =====
-    private GameObject realPrefab;
+    // （リアル版Prefabの保持は TonboController 側）
     private bool cuteMode = false;
     private HoldButton realButton;
     private HoldButton cuteButton;
@@ -784,21 +762,11 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
     private string Sfx { get { return cuteMode ? "_cute" : ""; } }
 
     /// <summary>使うトンボのPrefabを切り替える。Tonbo_cuteもTonboと同じ処理（大きさ・色・記録）で動く</summary>
-    void SetMode(bool cute)
+void SetMode(bool cute)
     {
-        cuteMode = cute && tonboCutePrefab != null;
+        cuteMode = cute && tonbo.HasCutePrefab;
         PlayerPrefs.SetInt("Tonbo_CuteMode", cuteMode ? 1 : 0);
-        GameObject p = cuteMode ? tonboCutePrefab : realPrefab;
-        if (p == tonboPrefab) return;
-
-        HideTonbo();
-        if (tonboInstance != null) Destroy(tonboInstance);
-        tonboInstance = null;
-        tonboRenderers = null;
-        tonboOriginalMats = null;
-        foreach (var m in tonboTempMats) if (m != null) Destroy(m);
-        tonboTempMats.Clear();
-        tonboPrefab = p;
+        tonbo.SelectPrefab(cuteMode);
     }
 
     /// <summary>スタート球を選んだ後に出る、タイプ選択画面（リアル=左 / キュート=右）</summary>
@@ -892,7 +860,7 @@ void InitSettings()
         // トンボが杭に着地するまでは、リング（円）を表示しない
         if (lr != null)
         {
-            bool waitLanding = (state == GameState.Waiting && tonboPrefab != null && !(tonboRunning && Time.time - tonboFlightStartTime >= tonboFlightSeconds));
+            bool waitLanding = (state == GameState.Waiting && tonbo.WaitingForLanding);
             if (waitLanding) { if (lr.enabled) { lr.enabled = false; ringHiddenForLanding = true; } }
             else if (ringHiddenForLanding)
             {
@@ -946,7 +914,7 @@ void InitSettings()
         }
 
         HandleResetButton();
-        UpdateTonbo();
+        tonbo.Tick();
 
         if (state == GameState.Cleared)
         {
@@ -970,7 +938,7 @@ void InitSettings()
         }
 
         // トンボが杭に着地するまでは、なぞり判定を始めない
-        if (state == GameState.Waiting && tonboPrefab != null && !(tonboRunning && Time.time - tonboFlightStartTime >= tonboFlightSeconds))
+        if (state == GameState.Waiting && tonbo.WaitingForLanding)
         {
             lastAngle = float.NaN;
             return;
@@ -1127,58 +1095,15 @@ void ResetRingProgress()
         nextSpawnTime = Time.time + nextRingDelay;
     }
 
-void StartTonbo()
+
+
+void HideTonbo()
     {
-        if (tonboPrefab == null) return;
-
-        // プレイヤー側の向き（リングの法線のうち頭がある側）を求める
-        Transform head = headTransform;
-        if (head == null && Camera.main != null) head = Camera.main.transform;
-        // 円の角度（左右でY軸回転する）には依存せず、最初のリングの向きを基準にした固定方向にする
-        Vector3 normal = initialRot * Vector3.up;
-        Vector3 toPlayer = normal;
-        if (head != null && Vector3.Dot(head.position - initialPos, normal) < 0f) toPlayer = -normal;
-
-        // 円の奥（プレイヤーと反対側）から円の中心へ向かって飛んでくる
-        // 水平方向だけにして、真っ直ぐ（上下に傾かず）飛んでくるようにする
-        Vector3 flat = Vector3.ProjectOnPlane(toPlayer, Vector3.up);
-        if (flat.sqrMagnitude > 0.01f) toPlayer = flat.normalized;
-        if (head != null) { Vector3 hp = head.position - transform.position; hp.y = 0f; if (hp.sqrMagnitude > 0.01f) toPlayer = hp.normalized; }
-
-        // 位置の座標だけ円の中心に合わせる
-        tonboEnd = transform.position;
-        tonboStart = tonboEnd - toPlayer * tonboStartDistance;
-
-        if (tonboInstance == null)
-        {
-            tonboInstance = Instantiate(tonboPrefab);
-            tonboInstance.name = "TonboRuntime";
-        }
-        // 大きさは対数正規分布：倍率 = exp(N(0, σ))。普通の大きさ(×1)が最も多く、低確率で大小に振れる
-        float sizeMul = Mathf.Exp(RandomGaussian() * tonboSizeSigma);
-        sizeMul = Mathf.Clamp(sizeMul, tonboSizeMinMultiplier, tonboSizeMaxMultiplier);
-        currentTonboScale = tonboScale * sizeMul;
-        tonboInstance.transform.localScale = Vector3.one * currentTonboScale;
-        tonboInstance.transform.SetPositionAndRotation(tonboStart, Quaternion.LookRotation(toPlayer, Vector3.up));
-        ApplyTonboColors();
-        tonboInstance.SetActive(true);
-        tonboFlightStartTime = Time.time;
-        tonboRunning = true;
-    }
-
-    void HideTonbo()
-    {
-        tonboRunning = false;
-        if (tonboInstance != null) tonboInstance.SetActive(false);
+        if (tonbo != null) tonbo.Hide();
     }
 
 /// <summary>標準正規分布 N(0,1) に従う乱数（Box-Muller法）</summary>
-    float RandomGaussian()
-    {
-        float u1 = Mathf.Max(Random.value, 1e-6f);
-        float u2 = Random.value;
-        return Mathf.Sqrt(-2f * Mathf.Log(u1)) * Mathf.Cos(2f * Mathf.PI * u2);
-    }
+
 
 
 /// <summary>
@@ -1186,92 +1111,10 @@ void StartTonbo()
     /// 元のマテリアルが同じ部分（両目・足・腹部・頭と胸など）は同じ色に統一される。
     /// Prefab側のマテリアルは書き換えず、実行時にコピーを作って差し替える。
     /// </summary>
-    void ApplyTonboColors()
-    {
-        if (tonboInstance == null) return;
-
-        if (tonboRenderers == null)
-        {
-            tonboRenderers = tonboInstance.GetComponentsInChildren<Renderer>(true);
-            tonboOriginalMats = new Material[tonboRenderers.Length][];
-            for (int i = 0; i < tonboRenderers.Length; i++)
-                tonboOriginalMats[i] = tonboRenderers[i].sharedMaterials;
-        }
-
-        // 前回のランダム色マテリアルを破棄し、まず元の色に戻す
-        for (int i = 0; i < tonboRenderers.Length; i++)
-            tonboRenderers[i].sharedMaterials = tonboOriginalMats[i];
-        foreach (var m in tonboTempMats) if (m != null) Destroy(m);
-        tonboTempMats.Clear();
-
-        currentVariantColors.Clear();
-        if (!tonboForceRandomColor && Random.value >= tonboRandomColorChance) return;
-
-        // 元のマテリアルごとに1色だけ決める（同じマテリアル＝同じ色の部分は統一）
-        var colorMap = new Dictionary<Material, Material>();
-        for (int i = 0; i < tonboRenderers.Length; i++)
-        {
-            Material[] src = tonboOriginalMats[i];
-            Material[] dst = new Material[src.Length];
-            for (int j = 0; j < src.Length; j++)
-            {
-                Material orig = src[j];
-                if (orig == null) { dst[j] = null; continue; }
-
-                Material tinted;
-                if (!colorMap.TryGetValue(orig, out tinted))
-                {
-                    tinted = new Material(orig);
-                    Color c = Color.HSVToRGB(Random.value, Random.Range(0.6f, 1f), Random.Range(0.75f, 1f));
-                    // 羽などの半透明マテリアルは元のアルファを保つ
-                    if (tinted.HasProperty("_Color")) { c.a = tinted.color.a; tinted.color = c; }
-                    else if (tinted.HasProperty("_BaseColor")) { c.a = tinted.GetColor("_BaseColor").a; tinted.SetColor("_BaseColor", c); }
-                    colorMap[orig] = tinted;
-                    tonboTempMats.Add(tinted);
-                    currentVariantColors.Add(c);
-                }
-                dst[j] = tinted;
-            }
-            tonboRenderers[i].sharedMaterials = dst;
-        }
-    }
 
 
-    void UpdateTonbo()
-    {
-        if (tonboPrefab == null) return;
 
-        if ((state == GameState.Waiting || state == GameState.Playing) && !tonboRunning)
-        {
-            StartTonbo();
-        }
-        if (!tonboRunning || tonboInstance == null) return;
 
-        // トンボが杭に着地したら（何回目でも）カウントスタート
-        if (state == GameState.Waiting && Time.time - tonboFlightStartTime >= tonboFlightSeconds)
-        {
-            state = GameState.Playing;
-            sessionStartTime = Time.time;
-        }
-
-        if (state == GameState.Waiting || state == GameState.Playing)
-        {
-            // 杭に向かって飛び、着地したらその場に止まる
-            float t = Mathf.Clamp01((Time.time - tonboFlightStartTime) / Mathf.Max(0.1f, tonboFlightSeconds));
-            Vector3 dir = (tonboEnd - tonboStart).normalized;
-            Vector3 side = Vector3.Cross(dir, Vector3.up).normalized;
-            float w = tonboWobble * (1f - t);
-            Vector3 pos = Vector3.Lerp(tonboStart, tonboEnd, t)
-                        + side * Mathf.Sin(Time.time * 4f) * w
-                        + Vector3.up * Mathf.Sin(Time.time * 5.3f) * w;
-            tonboInstance.transform.SetPositionAndRotation(pos, Quaternion.LookRotation(dir, Vector3.up));
-        }
-        else if (state == GameState.Failed)
-        {
-            // ゲームオーバー時は円の中心に止まる
-            tonboInstance.transform.position = tonboEnd;
-        }
-    }
 
 
     void SpawnNextRing()
