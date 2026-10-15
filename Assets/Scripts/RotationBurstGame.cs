@@ -189,38 +189,9 @@ public class RotationBurstGame : MonoBehaviour
     private enum GameState { Title, Settings, ChooseType, Records, Waiting, Playing, Cleared, Failed }
     private GameState state = GameState.Title;
     private GameObject titleLogo;
-    [Header("杭（トンボが止まる）")]
-    public int stakeCount = 7;
-    public float stakeRadius = 0.015f;
-    public Color stakeColor = new Color(0.40f, 0.28f, 0.18f);
-    private Transform stakeRoot;
-    private readonly List<Vector3> stakeCenters = new List<Vector3>();
-    private readonly List<Quaternion> stakeRots = new List<Quaternion>();
-    private int lastStakeIndex = -1;
-    [Tooltip("水面の高さ（Mesh_Waterが見つかれば自動で上書き）")]
-    public float waterSurfaceY = -0.5f;
-    [Tooltip("杭を水面より下に沈める深さ（m）")]
-    public float stakeSinkDepth = 0.3f;
-    private bool waterFound = false;
-    [Tooltip("プレイ開始時にプレイヤーを前（水面の杭の方）へ出す距離（m）。杭もこの分だけ前に立つ")]
-    public float playerAdvanceMeters = 1.6f;
-    [Tooltip("杭の広がり倍率（左右・奥行き）。大きいほど杭どうしが離れる")]
-    public float stakeSpread = 1.8f;
-    private bool playerAdvanced = false;
-    private Vector3 stakeShiftVec = Vector3.zero;
-    private bool woodFound = false;
-    private bool hasWood = false;
-    private Bounds woodBounds;
-    [Tooltip("杭のモデル（Tonbo_Stake.fbx）。未設定なら円柱で代用")]
-    public GameObject stakePrefab;
-    public float stakeModelLength = 1.0f;
-    [Tooltip("杭どうしの最小間隔（m）。大きいほどバラけて立つ")]
-    public float stakeMinSpacing = 0.6f;
-    [Tooltip("杭を木の足場(Mesh_Wood)から離す距離（m）。杭は水面の上にだけ立つ")]
-    public float stakeWoodMargin = 0.3f;
-    [Tooltip("杭の奥行き方向のばらつき（±m）")]
-    public float stakeDepthJitter = 0.25f;
+    private TonboStakes stakes; // 杭の生成・配置・プレイヤー前進は TonboStakes.cs に分離
     private bool ringHiddenForLanding = false;
+    [Header("着地演出")]
     [Tooltip("トンボが杭に向かって飛んで着地するまでの秒数（着地するまでなぞり判定は始まらない）")]
     public float tonboFlightSeconds = 2f;
     private float tonboFlightStartTime = 0f;
@@ -268,6 +239,15 @@ public class RotationBurstGame : MonoBehaviour
     private Vector3 initialPos;
     private Quaternion initialRot;
     private Vector3 lastCenter;
+    public Vector3 InitialPos { get { return initialPos; } }
+    public Quaternion InitialRot { get { return initialRot; } }
+
+    // ---- TonboController 向けの公開API ----
+    public bool IsWaiting { get { return state == GameState.Waiting; } }
+    public bool IsPlaying { get { return state == GameState.Playing; } }
+    public bool IsFailed { get { return state == GameState.Failed; } }
+    /// <summary>トンボが着地したら呼ぶ。なぞり判定とカウントを開始する</summary>
+    public void BeginPlaying() { state = GameState.Playing; sessionStartTime = Time.time; }
 
     // トンボ
     private GameObject tonboInstance;
@@ -286,6 +266,12 @@ public class RotationBurstGame : MonoBehaviour
 
     System.Collections.IEnumerator Start()
     {
+        stakes = GetComponent<TonboStakes>();
+        if (stakes == null)
+        {
+            Debug.LogWarning("[RotationBurstGame] TonboStakes が見つからないため、初期値で追加します。Inspectorでアタッチして値を設定してください。");
+            stakes = gameObject.AddComponent<TonboStakes>();
+        }
         // 頭の位置が取れるまで待ち、立ち位置・向き・身長に関係なく、毎回同じ位置関係でゲームを置く
         yield return AlignPlayerSpace();
         InitGame();
@@ -352,7 +338,7 @@ public class RotationBurstGame : MonoBehaviour
             rig.transform.RotateAround(head.position, Vector3.up, -Quaternion.LookRotation(f).eulerAngles.y);
         Vector3 p = head.position;
         rig.transform.position += new Vector3(-p.x, referenceHeadHeight - p.y, -p.z);
-        if (playerAdvanced) rig.transform.position += stakeShiftVec;
+        if (stakes != null && stakes.PlayerAdvanced) rig.transform.position += stakes.ShiftVec;
     }
 
     void InitGame()
@@ -441,7 +427,7 @@ HoldButton MakeButton(string name, Vector3 pos, string label, Color idle, Color 
     /// <summary>オープニング画面に入る：リングとリセットボタンを隠し、スタートボタンを表示する</summary>
     void EnterTitle()
     {
-AdvancePlayer(false);
+if (stakes != null) stakes.AdvancePlayer(false);
         state = GameState.Title;
         startHoldTimer = 0f;
         if (lr != null) lr.enabled = false;
@@ -476,10 +462,10 @@ void HandleStartButton()
         if (galleryRoot != null) galleryRoot.SetActive(false);
         if (recordButton != null) recordButton.SetActive(false);
         if (backButton != null) backButton.SetActive(false);
-        AdvancePlayer(true);
+        if (stakes != null) stakes.AdvancePlayer(true);
         score = 0;
         ResetRingProgress();
-        { Vector3 sc; Quaternion sr; ChooseStakePose(out sc, out sr); transform.SetPositionAndRotation(sc, sr); lastCenter = sc; UpdateLinePositions(); }
+        { Vector3 sc; Quaternion sr; stakes.ChooseStakePose(out sc, out sr); transform.SetPositionAndRotation(sc, sr); lastCenter = sc; UpdateLinePositions(); }
         state = GameState.Waiting;
         SetColor(colorNormal);
         UpdateStatusText();
@@ -487,7 +473,7 @@ void HandleStartButton()
 
 /// <summary>メニューボタンの位置。side=-0.5でスタート（左）、+0.5で記録（右）</summary>
 /// <summary>メニュー座標のオフセットをワールドのずれに変換。X=右、Y=上、Z=奥（プレイヤーから遠ざかる向き）</summary>
-    Vector3 Off(Vector3 o)
+    public Vector3 Off(Vector3 o)
     {
         Vector3 fwd = -DirToHead(initialPos);
         fwd.y = 0f;
@@ -728,7 +714,7 @@ void AddGalleryLabel(string text, Vector3 localPos, float sizeMul)
     }
 
     /// <summary>指定位置から頭（プレイヤー）へ向かう水平方向の単位ベクトル</summary>
-    Vector3 DirToHead(Vector3 worldPos)
+    public Vector3 DirToHead(Vector3 worldPos)
     {
         Transform head = headTransform;
         if (head == null && Camera.main != null) head = Camera.main.transform;
@@ -902,7 +888,7 @@ void InitSettings()
         // タイトル画面のときだけ Libel Spiral ロゴを表示する
         if (titleLogo == null) titleLogo = GameObject.Find("LibelSpiralLogo");
         if (titleLogo != null) { bool showLogo = (state == GameState.Title); if (titleLogo.activeSelf != showLogo) titleLogo.SetActive(showLogo); }
-        if (ready && stakeRoot == null) BuildStakes(); // 杭は最初から水辺に立てておく（常時表示）
+        if (ready && stakes != null) stakes.EnsureBuilt(); // 杭は最初から水辺に立てておく（常時表示）
         // トンボが杭に着地するまでは、リング（円）を表示しない
         if (lr != null)
         {
@@ -1292,7 +1278,7 @@ void StartTonbo()
     {
         Vector3 center;
         Quaternion rot;
-        ChooseStakePose(out center, out rot);
+        stakes.ChooseStakePose(out center, out rot);
 
         transform.SetPositionAndRotation(center, rot);
         lastCenter = center;
@@ -1307,7 +1293,7 @@ void StartTonbo()
     /// 肩を中心に、手の届く範囲（前方）からランダムにリング位置を選ぶ。
     /// リングは常にプレイヤー側を向ける（ローカルYが法線＝頭の方向、ローカルZが上方向）。
     /// </summary>
-void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
+public void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
     {
         // プレイヤー（頭）を中心にした円弧上で左右に動かし、左右位置に応じてリングをY軸回転させる。
         // 距離（奥行き）は初期位置のまま、リングは常にプレイヤーの方を向く。
@@ -1361,125 +1347,19 @@ void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
 
     // ===== 杭（トンボが止まる場所）=====
     // 木の足場（Mesh_Wood）の上は杭を立てない
-    bool OnWood(Vector3 p)
-    {
-        if (!woodFound)
-        {
-            GameObject w = GameObject.Find("Mesh_Wood");
-            Renderer wr = (w != null) ? w.GetComponent<Renderer>() : null;
-            if (wr != null) { woodBounds = wr.bounds; hasWood = true; }
-            woodFound = true;
-        }
-        if (!hasWood) return false;
-        float m = stakeWoodMargin;
-        return p.x > woodBounds.min.x - m && p.x < woodBounds.max.x + m && p.z > woodBounds.min.z - m && p.z < woodBounds.max.z + m;
-    }
 
-    Vector3 StakeShift()
-    {
-        // 杭は水面の上だけに立てる。プレイヤーは木の足場の端まで前に出て、水面の杭に手が届くようにする
-        float d = playerAdvanceMeters;
-        OnWood(initialPos); // woodBoundsを読み込む
-        if (hasWood)
-        {
-            Vector3 fwd = -DirToHead(initialPos); fwd.y = 0f;
-            fwd = fwd.sqrMagnitude > 1e-6f ? fwd.normalized : Vector3.forward;
-            Vector3 target = new Vector3(initialPos.x, 0f, woodBounds.max.z + stakeWoodMargin + 0.3f);
-            Vector3 from = new Vector3(initialPos.x, 0f, initialPos.z);
-            d = Mathf.Max(d, Vector3.Dot(target - from, fwd));
-        }
-        return Off(new Vector3(0f, 0f, d));
-    }
+
+
 
     // プレイ開始で前へ出る／タイトルに戻ると元の位置へ戻る
-    void AdvancePlayer(bool forward)
-    {
-        OVRCameraRig rig = Object.FindObjectOfType<OVRCameraRig>();
-        if (rig == null) return;
-        if (forward && !playerAdvanced) { rig.transform.position += stakeShiftVec; playerAdvanced = true; }
-        else if (!forward && playerAdvanced) { rig.transform.position -= stakeShiftVec; playerAdvanced = false; }
-    }
 
-    float GetWaterY()
-    {
-        if (!waterFound)
-        {
-            GameObject w = GameObject.Find("Mesh_Water");
-            if (w != null) { Renderer wr = w.GetComponent<Renderer>(); waterSurfaceY = (wr != null) ? wr.bounds.max.y : w.transform.position.y; }
-            waterFound = true;
-        }
-        return waterSurfaceY;
-    }
 
-    void BuildStakes()
-    {
-        if (stakeRoot != null) return;
-        stakeRoot = new GameObject("TonboStakes").transform;
-        Vector3 savedLast = lastCenter;
-        Vector3 shift = StakeShift();
-        stakeShiftVec = shift;
-        Transform hd = headTransform != null ? headTransform : (Camera.main != null ? Camera.main.transform : null);
-        Vector3 playerAfter = (hd != null ? hd.position : Vector3.zero) + shift;
-        for (int n = 0; n < stakeCount; n++)
-        {
-            Vector3 c = initialPos; Quaternion r = initialRot;
-            float bestMin = -1f;
-            for (int t = 0; t < 200; t++)
-            {
-                Vector3 cc; Quaternion rr;
-                ChooseSpawnPose(out cc, out rr);
-                { Vector3 dh = cc - initialPos; dh.y = 0f; cc += shift + dh * (stakeSpread - 1f); cc += Off(new Vector3(0f, 0f, Random.Range(-stakeDepthJitter, stakeDepthJitter))); }
-                if (OnWood(cc)) continue;
-                { Vector3 dp = playerAfter - cc; rr = Quaternion.Euler(0f, Mathf.Atan2(dp.x, dp.z) * Mathf.Rad2Deg - 180f, 0f) * initialRot; }
-                float minD = float.MaxValue;
-                for (int k = 0; k < stakeCenters.Count; k++) minD = Mathf.Min(minD, Vector3.Distance(cc, stakeCenters[k]));
-                if (minD > bestMin) { bestMin = minD; c = cc; r = rr; }
-                if (minD >= stakeMinSpacing) break;
-            }
-            if (bestMin < 0f) c = initialPos + shift;
-            stakeCenters.Add(c); stakeRots.Add(r);
-            float perchY = c.y - 0.04f; // 杭の先端（トンボの体の少し下）
-            float floorY = GetWaterY() - stakeSinkDepth; // 水面の下まで立てる
-            float len = Mathf.Max(0.3f, perchY - floorY);
-            GameObject go;
-            if (stakePrefab != null)
-            {
-                go = Instantiate(stakePrefab);
-                go.name = "Stake" + n;
-                go.transform.SetParent(stakeRoot, false);
-                float yScale = len / Mathf.Max(0.01f, stakeModelLength);
-                go.transform.SetPositionAndRotation(new Vector3(c.x, perchY, c.z), Quaternion.Euler(0f, Random.Range(0f, 360f), 0f));
-                go.transform.localScale = new Vector3(1f, yScale, 1f);
-                Transform rope = go.transform.Find("Tonbo_Stake_Rope");
-                if (rope != null) { rope.localScale = new Vector3(1f, 1f / yScale, 1f); rope.localPosition = new Vector3(0f, -0.09f / yScale, 0f); }
-                foreach (Collider col in go.GetComponentsInChildren<Collider>()) Destroy(col);
-            }
-            else
-            {
-            go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            go.name = "Stake" + n;
-            Destroy(go.GetComponent<Collider>());
-            go.transform.SetParent(stakeRoot, false);
-            go.transform.position = new Vector3(c.x, perchY - len * 0.5f, c.z);
-            go.transform.localScale = new Vector3(stakeRadius * 2f, len * 0.5f, stakeRadius * 2f);
-            Renderer rend = go.GetComponent<Renderer>();
-            if (rend.material.HasProperty("_BaseColor")) rend.material.SetColor("_BaseColor", stakeColor);
-            if (rend.material.HasProperty("_Color")) rend.material.color = stakeColor;
-            }
-        }
-        lastCenter = savedLast;
-    }
+
+
+
 
     /// <summary>ランダムな杭を1本選び、その先端（トンボが止まる位置）をリングの中心にする</summary>
-    void ChooseStakePose(out Vector3 center, out Quaternion rot)
-    {
-        BuildStakes();
-        int idx = Random.Range(0, stakeCenters.Count);
-        int guard = 0;
-        while (idx == lastStakeIndex && stakeCenters.Count > 1 && guard++ < 20) idx = Random.Range(0, stakeCenters.Count);
-        lastStakeIndex = idx;
-        center = stakeCenters[idx]; rot = stakeRots[idx];
-    }
+
 
     bool IsValidSpawn(Vector3 c)
     {
