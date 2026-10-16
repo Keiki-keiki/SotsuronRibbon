@@ -45,6 +45,7 @@ public class GameMenuUI : MonoBehaviour
     private HoldButton recordButton;
     private HoldButton backButton;
     private HoldButton settingsButton;
+    private HoldButton handButton;
     private HoldButton realButton;
     private HoldButton cuteButton;
     private HoldButton recReal;
@@ -133,6 +134,11 @@ public class GameMenuUI : MonoBehaviour
         settingsButton = MakeButton("SettingsButton_" + gameObject.name, MenuButtonPos(-1f), "設定",
             new Color(0.8f, 0.5f, 0.1f), new Color(1f, 0.8f, 0.4f));
         settingsPanel.SetActive(false);
+
+        // 棒を持つ手（右／左）の切り替えボタン。設定画面の一番下（明るさスライダーの下）に出す
+        handButton = MakeButton("HandButton_" + gameObject.name, panelPos + Vector3.up * -0.27f, HandLabel(),
+            new Color(0.45f, 0.3f, 0.7f), new Color(0.75f, 0.6f, 1f));
+        handButton.SetActive(false);
     }
 
     /// <summary>タイプ選択画面（リアル=左 / キュート=右）のボタンを、最初に必要になったときに作る</summary>
@@ -178,6 +184,7 @@ public class GameMenuUI : MonoBehaviour
         SetActive(recReal, screen == MenuScreen.Records);
         SetActive(recCute, screen == MenuScreen.Records);
         if (settingsPanel != null) settingsPanel.SetActive(screen == MenuScreen.Settings);
+        SetActive(handButton, screen == MenuScreen.Settings);
     }
 
     // ===== 操作 =====
@@ -209,6 +216,7 @@ public class GameMenuUI : MonoBehaviour
             case MenuScreen.Settings:
                 // スライダーを先端でなぞる。「もどる」に触れ続けたら保存して戻る
                 if (settingsPanel != null) settingsPanel.Tick(tip);
+                if (handButton != null && handButton.Tick(tip, buttonRadius, startHoldSeconds)) ToggleHand();
                 if (backButton != null && backButton.Tick(tip, buttonRadius, startHoldSeconds))
                 {
                     if (settingsPanel != null) settingsPanel.Save();
@@ -239,5 +247,20 @@ public class GameMenuUI : MonoBehaviour
             return true;
         }
         return false;
+    }
+
+
+string HandLabel()
+    {
+        return RightHandStick.UseLeft ? "棒の手：左" : "棒の手：右";
+    }
+
+    /// <summary>棒を持つ手を右⇔左で切り替え、ボタンの文字を更新する</summary>
+    void ToggleHand()
+    {
+        RightHandStick stick = RightHandStick.Instance;
+        if (stick == null) return;
+        stick.SetLeft(!RightHandStick.UseLeft);
+        if (handButton != null) handButton.SetLabel(HandLabel());
     }
 }

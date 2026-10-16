@@ -62,6 +62,13 @@ public class HoldButton
         if (t != null) t.gameObject.SetActive(active);
     }
 
+/// <summary>ボタンの文字を書き換える</summary>
+    public void SetLabel(string label)
+    {
+        if (tm != null) tm.text = label;
+    }
+
+
     /// <summary>毎フレーム呼ぶ。holdSeconds秒触れ続けたらtrueを返す。radiusは奥行きの判定幅に使う</summary>
     public bool Tick(Transform tip, float radius, float holdSeconds)
     {
