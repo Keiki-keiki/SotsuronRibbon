@@ -60,6 +60,8 @@ public class TonboController : MonoBehaviour
     public List<Color> VariantColors { get { return currentVariantColors; } }
     /// <summary>トンボが出ていて飛行中（または着地済み）か</summary>
     public bool IsActive { get { return tonboInstance != null && tonboRunning; } }
+    /// <summary>今出ているトンボのTransform（虫籠演出でつかむ対象。なければnull）</summary>
+    public Transform TonboTransform { get { return tonboInstance != null && tonboInstance.activeSelf ? tonboInstance.transform : null; } }
     /// <summary>着地するまでは、リング表示となぞり判定を止めるための判定</summary>
     public bool WaitingForLanding
     {

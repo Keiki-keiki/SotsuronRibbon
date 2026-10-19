@@ -121,6 +121,7 @@ public class RotationBurstGame : MonoBehaviour
     private GameObject titleLogo;
     private TonboStakes stakes; // 杭の生成・配置・プレイヤー前進は TonboStakes.cs に分離
     private TonboController tonbo; // トンボの出現・飛行・色/大きさは TonboController.cs に分離
+    private MushikagoController mushikago; // 虫籠演出は MushikagoController.cs に分離（未アタッチなら従来どおり）
     private RecordsGallery records; // 記録の保存とギャラリー表示は RecordsGallery.cs に分離
     private bool ringHiddenForLanding = false;
     // 着地演出の設定（tonboFlightSeconds等）は TonboController に移動
@@ -196,6 +197,7 @@ public class RotationBurstGame : MonoBehaviour
             Debug.LogWarning("[RotationBurstGame] TonboController が見つからないため、初期値で追加します。Inspectorでアタッチして値を設定してください。");
             tonbo = gameObject.AddComponent<TonboController>();
         }
+        mushikago = GetComponent<MushikagoController>(); // 未アタッチでもOK（nullなら虫籠演出なし）
         records = GetComponent<RecordsGallery>();
         if (records == null)
         {
@@ -510,6 +512,7 @@ void EnterSettings()
         }
 
         tonbo.Tick();
+        if (mushikago != null && mushikago.IsBusy) mushikago.Tick(tipTransform); // 虫籠演出（終わるとIsBusyがfalseになる）
 
         if (state == GameState.Cleared)
         {
@@ -674,7 +677,7 @@ void ResetRingProgress()
     {
         score++;
         records.RecordCaught();
-        HideTonbo();
+        if (!TryBeginMushikago()) HideTonbo(); // 虫籠演出を始められないときは従来どおりトンボを隠す
         if (score > bestScore) bestScore = score;
         state = GameState.Cleared;
         flashUntil = Time.time + 0.3f;
@@ -687,6 +690,18 @@ void HideTonbo()
     {
         if (tonbo != null) tonbo.Hide();
     }
+
+/// <summary>虫籠演出を始める。始められなければ false を返す（呼び出し側が従来どおりトンボを隠す）</summary>
+    bool TryBeginMushikago()
+    {
+        if (mushikago == null || !mushikago.CanCatch || tonbo == null) return false;
+        Transform tf = tonbo.TonboTransform;
+        if (tf == null) return false;
+        Transform head = headTransform != null ? headTransform : (Camera.main != null ? Camera.main.transform : null);
+        mushikago.BeginCatch(tf, tonbo.CurrentScale, head);
+        return mushikago.IsBusy;
+    }
+
 
 void SpawnNextRing()
     {
