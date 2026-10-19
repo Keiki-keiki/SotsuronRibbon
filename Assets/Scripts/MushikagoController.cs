@@ -232,6 +232,18 @@ public class MushikagoController : MonoBehaviour
         cage = Instantiate(cagePrefab);
         cage.name = "MushikagoRuntime";
 
+        // モデルに含まれるBlender由来のカメラ・ライトは不要。残るとVRで視点を奪うので、無効化して削除する
+        foreach (Camera cam in cage.GetComponentsInChildren<Camera>(true))
+        {
+            cam.enabled = false;
+            if (cam.gameObject != cage) Destroy(cam.gameObject); else Destroy(cam);
+        }
+        foreach (Light lt in cage.GetComponentsInChildren<Light>(true))
+        {
+            lt.enabled = false;
+            if (lt.gameObject != cage) Destroy(lt.gameObject); else Destroy(lt);
+        }
+
         animator = cage.GetComponent<Animator>();
         if (animator == null) animator = cage.AddComponent<Animator>();
         animator.runtimeAnimatorController = null;

@@ -517,7 +517,7 @@ void EnterSettings()
         if (state == GameState.Cleared)
         {
             if (Time.time >= flashUntil) SetColor(colorClear);
-            if (Time.time >= nextSpawnTime) SpawnNextRing();
+            if (Time.time >= nextSpawnTime && !(mushikago != null && mushikago.IsBusy)) { HideTonbo(); SpawnNextRing(); } // 虫籠演出が終わるまで次のリングを出さない
             UpdateStatusText();
             return;
         }
