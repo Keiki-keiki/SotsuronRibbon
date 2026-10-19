@@ -35,6 +35,8 @@ public class TonboCage : MonoBehaviour
     public float cageWidthMargin = 1.3f;
     [Tooltip("籠の上端をトンボの何メートル下に置くか")]
     public float gapBelowTonbo = 0.03f;
+    [Tooltip("虫かごの位置：トンボを基準に、プレイヤーから見て左右どちらか（生成ごとにランダム）へずらす距離（m）")]
+    public float cageSideOffset = 0.35f;
     [Tooltip("下から上がってくる距離（メートル）")]
     public float riseDistance = 0.3f;
     [Tooltip("フェードイン/アウトの秒数")]
@@ -114,6 +116,7 @@ public class TonboCage : MonoBehaviour
         heldHandId = -1;
         dwell = 0f;
         phase = Phase.WaitGrab;
+        if (cage == null) BuildCage(tonboTf.position);
     }
 
     /// <summary>毎フレーム呼ぶ。演出がすべて終わったら true を返す</summary>
@@ -292,9 +295,18 @@ public class TonboCage : MonoBehaviour
         float yaw = Vector3.SignedAngle(hingeDir, -toHead, Vector3.up);
         cage.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
 
-        // トンボの真下に、上端がトンボの少し下に来るよう置く
+        // トンボを基準に、プレイヤーから見て左右どちらかへずらして置く（生成時に一度だけ決定、以後は固定）。高さは上端がトンボの少し下
         Bounds b = CombinedBounds();
-        Vector3 delta = new Vector3(tonboPos.x - b.center.x, (tonboPos.y - gapBelowTonbo) - b.max.y, tonboPos.z - b.center.z);
+        Transform headTf = (game != null && game.headTransform != null) ? game.headTransform : (Camera.main != null ? Camera.main.transform : null);
+        Vector3 side = Vector3.right; // 頭が取れないときの代替
+        if (headTf != null)
+        {
+            Vector3 toTonbo = tonboPos - headTf.position; toTonbo.y = 0f;
+            if (toTonbo.sqrMagnitude > 1e-4f) side = Vector3.Cross(Vector3.up, toTonbo.normalized); // プレイヤーから見た右方向
+        }
+        float sideSign = UnityEngine.Random.value < 0.5f ? -1f : 1f;
+        Vector3 cageXZ = tonboPos + side * cageSideOffset * sideSign;
+        Vector3 delta = new Vector3(cageXZ.x - b.center.x, (tonboPos.y - gapBelowTonbo) - b.max.y, cageXZ.z - b.center.z);
         cage.transform.position += delta;
         cageTarget = cage.transform.position;
 

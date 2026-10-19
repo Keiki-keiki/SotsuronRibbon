@@ -73,6 +73,7 @@ public class MushikagoController : MonoBehaviour
     private Quaternion cageRot;
     private Vector3 tonboLocalScale;
     private float phaseTime, catchElapsed, insideTimer;
+    private float dbgNextLog; // [MUSHI-DBG] 一時ログ用（原因特定後に削除）
 
     public bool CanCatch { get { return cagePrefab != null && lidClip != null; } }
     public bool IsBusy { get { return phase != Phase.Idle; } }
@@ -111,6 +112,7 @@ public class MushikagoController : MonoBehaviour
         SetVisible(true);
 
         phase = Phase.FadingIn;
+        Debug.Log("[MUSHI-DBG] BeginCatch tonbo=" + tonbo.position.ToString("F2") + " wingspan=" + wingspan.ToString("F3") + " cageScale=" + cageScale.ToString("F2") + " cagePos=" + endPos.ToString("F2") + " tonboActive=" + tonbo.gameObject.activeInHierarchy); // [MUSHI-DBG]
         phaseTime = 0f;
         catchElapsed = 0f;
         insideTimer = 0f;
@@ -151,6 +153,7 @@ public class MushikagoController : MonoBehaviour
             case Phase.WaitGrab:
             {
                 // 棒の先端がトンボに触れたら、つかんだことにする
+                if (Time.time >= dbgNextLog) { dbgNextLog = Time.time + 0.5f; Debug.Log("[MUSHI-DBG] WaitGrab tip=" + (tip != null ? tip.position.ToString("F2") : "NULL") + " tonbo=" + tonbo.position.ToString("F2") + " active=" + tonbo.gameObject.activeInHierarchy + " dist=" + (tip != null ? Vector3.Distance(tip.position, tonbo.position).ToString("F3") : "-") + " need<" + (grabRadius + wingspan * 0.25f).ToString("F3")); } // [MUSHI-DBG]
                 if (tip != null && Vector3.Distance(tip.position, tonbo.position) < grabRadius + wingspan * 0.25f)
                     NextPhase(Phase.Carrying);
                 break;
@@ -216,7 +219,7 @@ public class MushikagoController : MonoBehaviour
         phase = Phase.Idle;
     }
 
-    void NextPhase(Phase p) { phase = p; phaseTime = 0f; }
+    void NextPhase(Phase p) { phase = p; phaseTime = 0f; Debug.Log("[MUSHI-DBG] phase -> " + p); } // [MUSHI-DBG]
 
     bool IsInsideCage(Vector3 worldPos)
     {

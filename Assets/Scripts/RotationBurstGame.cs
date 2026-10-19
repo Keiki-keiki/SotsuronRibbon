@@ -513,11 +513,14 @@ void EnterSettings()
 
         tonbo.Tick();
         if (mushikago != null && mushikago.IsBusy) mushikago.Tick(tipTransform); // 虫籠演出（終わるとIsBusyがfalseになる）
+        bool cageFinished = true; // TonboCage.Tick の戻り値（演出終了=true。未使用・Idleのときも true）
+        { TonboCage tonboCage = GetComponent<TonboCage>(); if (tonboCage != null && tonboCage.enabled) cageFinished = tonboCage.Tick(tipTransform); } // 手で掴む虫籠演出
+
 
         if (state == GameState.Cleared)
         {
             if (Time.time >= flashUntil) SetColor(colorClear);
-            if (Time.time >= nextSpawnTime && !(mushikago != null && mushikago.IsBusy)) { HideTonbo(); SpawnNextRing(); } // 虫籠演出が終わるまで次のリングを出さない
+            if (cageFinished) { HideTonbo(); SpawnNextRing(); } // TonboCage の演出が終わった（Tick が true）フレームで次のリングへ
             UpdateStatusText();
             return;
         }
@@ -694,6 +697,13 @@ void HideTonbo()
 /// <summary>虫籠演出を始める。始められなければ false を返す（呼び出し側が従来どおりトンボを隠す）</summary>
     bool TryBeginMushikago()
     {
+        TonboCage cage = GetComponent<TonboCage>();
+        Debug.Log("[TMP-DEBUG] TryBeginMushikago called: cage=" + (cage != null) + " enabled=" + (cage != null && cage.enabled) + " Available=" + (cage != null && cage.Available) + " prefab=" + (cage != null && cage.cagePrefab != null) + " clip=" + (cage != null && cage.cageClip != null) + " tonboTf=" + (tonbo != null && tonbo.TonboTransform != null));
+        if (cage != null && cage.enabled && cage.Available)
+        {
+            Debug.Log("[TMP-DEBUG] cage.BeginCatch() called"); cage.BeginCatch(); // 手で掴む虫籠演出（TonboCage）。Tick・終了判定は次のステップで配線
+            return true;
+        }
         if (mushikago == null || !mushikago.CanCatch || tonbo == null) return false;
         Transform tf = tonbo.TonboTransform;
         if (tf == null) return false;
