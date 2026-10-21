@@ -167,6 +167,7 @@ public class RotationBurstGame : MonoBehaviour
     // ランダム出現・スコア関連
     private int score = 0;
     private int bestScore = 0;
+    private const string BestScoreKey = "Tonbo_BestScore"; // 最高スコアのPlayerPrefsキー
     private float nextSpawnTime = 0f;
     private Vector3 initialPos;
     private Quaternion initialRot;
@@ -357,6 +358,7 @@ void StartGame()
         records.HideGallery();
         if (stakes != null) stakes.AdvancePlayer(true);
         score = 0;
+        bestScore = PlayerPrefs.GetInt(BestScoreKey, 0); // 保存済みの最高スコアを読み込む
         ResetRingProgress();
         { Vector3 sc; Quaternion sr; stakes.ChooseStakePose(out sc, out sr); transform.SetPositionAndRotation(sc, sr); lastCenter = sc; UpdateLinePositions(); }
         state = GameState.Waiting;
@@ -382,6 +384,7 @@ void StartGame()
 void EnterRecords()
     {
         state = GameState.Records;
+        bestScore = PlayerPrefs.GetInt(BestScoreKey, 0); // 記録画面に出す最高スコアを読み込む
         menu.Show(MenuScreen.Records);
         SetTextLayout(true);
         records.BuildGallery();
@@ -537,7 +540,7 @@ void EnterSettings()
         if (state == GameState.Cleared)
         {
             if (Time.time >= flashUntil) SetColor(colorClear);
-            if (cageFinished) { TonboCage cageForScore = GetComponent<TonboCage>(); if (!(cageForScore != null && cageForScore.enabled && cageForScore.AutoStored)) { score++; if (score > bestScore) bestScore = score; } HideTonbo(); SpawnNextRing(); } // TonboCage の演出が終わった（Tick が true）フレームで次のリングへ
+            if (cageFinished) { TonboCage cageForScore = GetComponent<TonboCage>(); if (!(cageForScore != null && cageForScore.enabled && cageForScore.Escaped)) { score++; if (score > bestScore) { bestScore = score; PlayerPrefs.SetInt(BestScoreKey, bestScore); PlayerPrefs.Save(); } } HideTonbo(); SpawnNextRing(); } // TonboCage の演出が終わった（Tick が true）フレームで次のリングへ
             UpdateStatusText();
             return;
         }
@@ -939,6 +942,10 @@ void UpdateStatusText()
         switch (state)
         {
             case GameState.Records:
+                uiText.color = Color.white;
+                uiText.text = string.Format("最高記録 {0}匹", bestScore); // 記録画面：保存済みの最高スコア（HUD上中央）
+                break;
+
             case GameState.Settings:
             case GameState.ChooseType:
             case GameState.Title:

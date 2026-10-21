@@ -53,13 +53,21 @@ public class TonboCage : MonoBehaviour
     [Tooltip("Touchモード：籠の中で手をこの秒数とどめると「離した」とみなす")]
     public float releaseDwellSeconds = 0.6f;
     [Range(0f, 1f)] public float pinchThreshold = 0.8f;
-    [Tooltip("つかまないまま放置したとき、自動で籠に入れて進める秒数")]
-    public float catchTimeout = 20f;
+    [Tooltip("捕獲の制限時間（秒）。この時間内に籠へ収納できないとトンボは飛び去り、失敗（スコアなし）で次のリングへ進む")]
+    public float catchTimeLimit = 10f;
+    [Tooltip("飛び去るのにかかる秒数")]
+    public float escapeSeconds = 1.2f;
+    [Tooltip("飛び去る距離（メートル）")]
+    public float escapeDistance = 3f;
 
-    private enum Phase { Idle, WaitGrab, Held, Closing, Sinking }
+    private enum Phase { Idle, WaitGrab, Held, Closing, Sinking, Escaping }
     private Phase phase = Phase.Idle;
-    /// <summary>今回の収納が catchTimeout による自動収納だったか（BeginCatch でリセット）。スコア加算の判定用</summary>
-    public bool AutoStored { get; private set; }
+    /// <summary>今回の捕獲が制限時間切れでトンボに逃げられたか（BeginCatch でリセット）。スコア加算の判定用</summary>
+    public bool Escaped { get; private set; }
+    private float catchStart;
+    private float escapeStart;
+    private Vector3 escapeFrom;
+    private Vector3 escapeDir;
 
     private RotationBurstGame game;
     private TonboController tonbo;
@@ -116,7 +124,8 @@ public class TonboCage : MonoBehaviour
         landingRot = tonboTf.rotation;
         waitStart = Time.time;
         heldHandId = -1;
-        AutoStored = false;
+        Escaped = false;
+        catchStart = Time.time;
         dwell = 0f;
         phase = Phase.WaitGrab;
         if (cage == null) BuildCage(tonboTf.position);
@@ -134,6 +143,7 @@ public class TonboCage : MonoBehaviour
             case Phase.Held: TickHeld(stickTip); break;
             case Phase.Closing: TickClosing(); break;
             case Phase.Sinking: if (TickSinking()) return true; break;
+            case Phase.Escaping: if (TickEscaping()) return true; break;
         }
         return phase == Phase.Idle;
     }
@@ -143,12 +153,10 @@ public class TonboCage : MonoBehaviour
     {
         if (cage != null) UpdateCageIntro();
 
-        // 放置されたら自動で進める
-        if (Time.time - waitStart >= catchTimeout)
+        // 制限時間内に収納できなければ、トンボは飛び去る
+        if (Time.time - catchStart >= catchTimeLimit)
         {
-            if (cage == null) BuildCage(tonboTf.position);
-            AutoStored = true;
-            ReleaseIntoCage();
+            StartEscape();
             return;
         }
 
@@ -172,6 +180,13 @@ public class TonboCage : MonoBehaviour
     // ---------------- 手に持っている ----------------
     void TickHeld(Transform stickTip)
     {
+        // 掴んでいても、制限時間内に収納できなければ逃げられる
+        if (Time.time - catchStart >= catchTimeLimit)
+        {
+            heldHandId = -1;
+            StartEscape();
+            return;
+        }
         UpdateCageIntro();
         SampleHands(stickTip);
 
@@ -252,7 +267,36 @@ public class TonboCage : MonoBehaviour
         return false;
     }
 
-    void Finish()
+    /// <summary>制限時間切れ：トンボがプレイヤーと反対の斜め上へ飛び去り、籠は下へ消える</summary>
+    void StartEscape()
+    {
+        Escaped = true;
+        tonboTf.SetParent(null, true);
+        escapeFrom = tonboTf.position;
+        Vector3 away = -game.DirToHead(escapeFrom);
+        escapeDir = (away + Vector3.up * 0.6f).normalized;
+        escapeStart = Time.time;
+        if (cage != null) sinkFrom = cage.transform.position;
+        phase = Phase.Escaping;
+    }
+
+    bool TickEscaping()
+    {
+        float k = Mathf.Clamp01((Time.time - escapeStart) / Mathf.Max(0.1f, escapeSeconds));
+        tonboTf.position = escapeFrom + escapeDir * (escapeDistance * k * k); // だんだん加速して離れる
+        tonboTf.rotation = Quaternion.LookRotation(escapeDir, Vector3.up);
+        if (cage != null)
+        {
+            float e = Mathf.SmoothStep(0f, 1f, k);
+            cage.transform.position = sinkFrom + Vector3.down * riseDistance * e;
+            SetAlpha(1f - e);
+        }
+        if (k >= 1f) { Finish(); return true; }
+        return false;
+    }
+
+    
+void Finish()
     {
         if (tonboTf != null) tonboTf.SetParent(null, true);
         DestroyCage();
