@@ -108,6 +108,23 @@ public class RotationBurstGame : MonoBehaviour
     private AudioSource audioSource;
     private Text uiText;
 
+    [Header("HUD（カメラ追従の表示）")]
+    [Tooltip("HMDカメラの正面から、HUDまでの距離（メートル）")]
+    public float hudDistance = 0.65f;
+    public float hudWidth = 800f;
+    public float hudHeight = 480f;
+    [Tooltip("HUDキャンバスの縮尺（1px = この値メートル）")]
+    public float hudScale = 0.001f;
+    [Tooltip("HUD端からの余白（キャンバス上のpx）")]
+    public float hudMargin = 40f;
+    private Text hudTimeText;   // 左下：残り時間
+    private Text hudScoreText;  // 右下：スコア表示用の領域（未実装・空のまま）
+    private bool hudMode = false;
+    private bool hudClearedPrev = false; // 表示専用：直前フレームがClearedだったか
+    private bool hudCapturing = false;    // 表示専用：このClearedが虫かご演出つきか（Cleared突入時に1回だけ判定）
+
+
+
     private static readonly Color colorNormal = Color.white;
 
     private static readonly Color colorTouching = new Color(0.3f, 0.7f, 1f); // リングに触れている間
@@ -372,9 +389,9 @@ void EnterRecords()
     }
 
 /// <summary>ステータステキストの配置を切り替える。記録画面では左側に寄せて幅を狭め、右側のトンボ一覧と重ならないようにする</summary>
-    void SetTextLayout(bool recordsLayout)
+void SetTextLayout(bool recordsLayout)
     {
-        if (uiText == null) return;
+        if (uiText == null || hudMode) return; // HUDはカメラ固定なので配置は切り替えない
         RectTransform rt = uiText.rectTransform;
         if (recordsLayout)
         {
@@ -520,7 +537,7 @@ void EnterSettings()
         if (state == GameState.Cleared)
         {
             if (Time.time >= flashUntil) SetColor(colorClear);
-            if (cageFinished) { HideTonbo(); SpawnNextRing(); } // TonboCage の演出が終わった（Tick が true）フレームで次のリングへ
+            if (cageFinished) { TonboCage cageForScore = GetComponent<TonboCage>(); if (!(cageForScore != null && cageForScore.enabled && cageForScore.AutoStored)) { score++; if (score > bestScore) bestScore = score; } HideTonbo(); SpawnNextRing(); } // TonboCage の演出が終わった（Tick が true）フレームで次のリングへ
             UpdateStatusText();
             return;
         }
@@ -676,12 +693,10 @@ void ResetRingProgress()
         flashUntil = -1f;
     }
 
-    void OnRingCleared()
+void OnRingCleared()
     {
-        score++;
         records.RecordCaught();
         if (!TryBeginMushikago()) HideTonbo(); // 虫籠演出を始められないときは従来どおりトンボを隠す
-        if (score > bestScore) bestScore = score;
         state = GameState.Cleared;
         flashUntil = Time.time + 0.3f;
         nextSpawnTime = Time.time + nextRingDelay;
@@ -820,8 +835,16 @@ void SetColor(Color c)
         lr.endColor = c;
     }
 
-    void CreateStatusText()
+void CreateStatusText()
     {
+        // HMDカメラ（CenterEyeAnchor）の子としてHUDを作る。取れない場合のみ従来のワールドCanvasにフォールバック
+        Transform head = headTransform != null ? headTransform : (Camera.main != null ? Camera.main.transform : null);
+        if (head != null)
+        {
+            CreateHud(head);
+            return;
+        }
+
         Canvas targetCanvas = null;
         foreach (var c in Object.FindObjectsOfType<Canvas>())
         {
@@ -833,28 +856,85 @@ void SetColor(Color c)
         }
         if (targetCanvas == null) return;
 
-        GameObject textGO = new GameObject("StatusText_" + gameObject.name);
-        textGO.transform.SetParent(targetCanvas.transform, false);
-
-        RectTransform rt = textGO.AddComponent<RectTransform>();
-        rt.anchorMin = new Vector2(0.5f, 0.5f);
-        rt.anchorMax = new Vector2(0.5f, 0.5f);
-        rt.pivot = new Vector2(0.5f, 0.5f);
-        rt.anchoredPosition = new Vector2(textLocalX, textLocalY);
-        rt.sizeDelta = new Vector2(700f, 250f);
-
-        uiText = textGO.AddComponent<Text>();
-        uiText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        uiText.fontSize = textFontSize;
-        uiText.alignment = TextAnchor.MiddleCenter;
-        uiText.color = Color.white;
-        uiText.fontStyle = FontStyle.Bold;
-        uiText.text = "";
+        uiText = CreateHudText("StatusText_" + gameObject.name, targetCanvas.transform,
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(textLocalX, textLocalY),
+            new Vector2(700f, 250f), TextAnchor.MiddleCenter, textFontSize);
     }
+
+Text CreateHudText(string objName, Transform parent, Vector2 anchor, Vector2 pivot, Vector2 pos, Vector2 size, TextAnchor align, int fontSize)
+    {
+        GameObject go = new GameObject(objName);
+        go.transform.SetParent(parent, false);
+
+        RectTransform rt = go.AddComponent<RectTransform>();
+        rt.anchorMin = anchor;
+        rt.anchorMax = anchor;
+        rt.pivot = pivot;
+        rt.anchoredPosition = pos;
+        rt.sizeDelta = size;
+
+        Text t = go.AddComponent<Text>();
+        t.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        t.fontSize = fontSize;
+        t.alignment = align;
+        t.color = Color.white;
+        t.fontStyle = FontStyle.Bold;
+        t.raycastTarget = false;
+        t.text = "";
+
+        Outline o = go.AddComponent<Outline>(); // 背景が明るくても読めるように縁取り
+        o.effectColor = new Color(0f, 0f, 0f, 0.8f);
+        o.effectDistance = new Vector2(2f, -2f);
+        return t;
+    }
+
+
+void CreateHud(Transform head)
+    {
+        GameObject canvasGO = new GameObject("HUDCanvas");
+        canvasGO.transform.SetParent(head, false);
+        canvasGO.transform.localPosition = new Vector3(0f, 0f, hudDistance);
+        canvasGO.transform.localRotation = Quaternion.identity;
+        canvasGO.transform.localScale = Vector3.one * hudScale;
+
+        Canvas canvas = canvasGO.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.WorldSpace;
+        canvas.GetComponent<RectTransform>().sizeDelta = new Vector2(hudWidth, hudHeight);
+
+        // 上中央：状態メッセージ（開始案内・バースト進捗・クリア・ゲームオーバー）
+        uiText = CreateHudText("StatusText", canvasGO.transform,
+            new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -hudMargin),
+            new Vector2(700f, 200f), TextAnchor.UpperCenter, textFontSize);
+        // 左下：残り時間
+        hudTimeText = CreateHudText("TimeText", canvasGO.transform,
+            new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(hudMargin, hudMargin),
+            new Vector2(360f, 80f), TextAnchor.LowerLeft, 44);
+        // 右下：スコア表示の領域（今回は表示しない）
+        hudScoreText = CreateHudText("ScoreText", canvasGO.transform,
+            new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-hudMargin, hudMargin),
+            new Vector2(360f, 80f), TextAnchor.LowerRight, 44);
+
+        hudMode = true;
+    }
+
 
 void UpdateStatusText()
     {
         if (uiText == null) return;
+        if (hudTimeText != null) hudTimeText.text = ""; // 残り時間はプレイ中だけ表示
+        if (hudScoreText != null) // 右下：スコア（プレイ中の画面だけ表示）
+            hudScoreText.text = (state == GameState.Waiting || state == GameState.Playing || state == GameState.Cleared || state == GameState.Failed) ? string.Format("{0}匹", score) : "";
+
+        // 表示専用：Clearedに入った瞬間に、虫かご演出があるかを1回だけ判定して保持する
+        bool isCleared = (state == GameState.Cleared);
+        if (isCleared && !hudClearedPrev)
+        {
+            TonboCage cageForHud = GetComponent<TonboCage>();
+            hudCapturing = (cageForHud != null && cageForHud.enabled && cageForHud.Available)
+                           || (mushikago != null && mushikago.IsBusy);
+        }
+        if (!isCleared) hudCapturing = false;
+        hudClearedPrev = isCleared;
 
         switch (state)
         {
@@ -868,28 +948,42 @@ void UpdateStatusText()
             case GameState.Waiting:
                 uiText.color = Color.white;
                 uiText.text = string.Format(
-                    "リングをなぞって開始\n({0}秒以内に、1秒間に{1}回転を{2}回)\nスコア: {3}",
-                    sessionTimeLimit, rotationsPerBurst, requiredBursts, score);
+                    "リングをなぞって開始\n({0}秒以内に、1秒間に{1}回転を{2}回)",
+                    sessionTimeLimit, rotationsPerBurst, requiredBursts);
                 break;
 
             case GameState.Playing:
                 float remaining = Mathf.Max(0f, sessionTimeLimit - (Time.time - sessionStartTime));
                 uiText.color = Color.white;
-                uiText.text = string.Format(
-                    "残り {0:F1}秒   スコア: {3}\nバースト: {1} / {2}",
-                    remaining, burstCount, requiredBursts, score);
+                if (hudTimeText != null)
+                {
+                    hudTimeText.text = string.Format("残り {0:F1}秒", remaining);
+                    uiText.text = string.Format("バースト: {0} / {1}", burstCount, requiredBursts);
+                }
+                else
+                {
+                    uiText.text = string.Format("残り {0:F1}秒\nバースト: {1} / {2}", remaining, burstCount, requiredBursts);
+                }
                 break;
 
             case GameState.Cleared:
                 uiText.color = colorClear;
-                uiText.text = string.Format("クリア！\nスコア: {0}", score);
+                if (hudTimeText != null && hudCapturing)
+                {
+                    hudTimeText.text = "捕獲しよう！"; // 虫かご演出中は左下の時間表示の位置に出す
+                    uiText.text = "";
+                }
+                else
+                {
+                    uiText.text = "クリア！";
+                }
                 break;
 
             case GameState.Failed:
                 uiText.color = colorFail;
                 uiText.text = string.Format(
-                    "ゲームオーバー\nスコア: {0}（ベスト {1}）\\n{2}秒後にメニューに戻ります",
-                    score, bestScore, gameOverReturnSeconds);
+                    "ゲームオーバー\n{0}秒後にメニューに戻ります",
+                    gameOverReturnSeconds);
                 break;
         }
     }

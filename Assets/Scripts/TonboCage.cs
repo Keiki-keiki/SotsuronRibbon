@@ -58,6 +58,8 @@ public class TonboCage : MonoBehaviour
 
     private enum Phase { Idle, WaitGrab, Held, Closing, Sinking }
     private Phase phase = Phase.Idle;
+    /// <summary>今回の収納が catchTimeout による自動収納だったか（BeginCatch でリセット）。スコア加算の判定用</summary>
+    public bool AutoStored { get; private set; }
 
     private RotationBurstGame game;
     private TonboController tonbo;
@@ -114,6 +116,7 @@ public class TonboCage : MonoBehaviour
         landingRot = tonboTf.rotation;
         waitStart = Time.time;
         heldHandId = -1;
+        AutoStored = false;
         dwell = 0f;
         phase = Phase.WaitGrab;
         if (cage == null) BuildCage(tonboTf.position);
@@ -144,6 +147,7 @@ public class TonboCage : MonoBehaviour
         if (Time.time - waitStart >= catchTimeout)
         {
             if (cage == null) BuildCage(tonboTf.position);
+            AutoStored = true;
             ReleaseIntoCage();
             return;
         }
