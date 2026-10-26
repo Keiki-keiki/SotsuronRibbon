@@ -51,6 +51,8 @@ public class TonboStakes : MonoBehaviour
     public bool PlayerAdvanced { get { return playerAdvanced; } }
     /// <summary>プレイヤーを前へ出すときの移動量</summary>
     public Vector3 ShiftVec { get { return stakeShiftVec; } }
+    /// <summary>全ての杭の位置（読み取り専用）。虫かごが杭と重ならないかの判定に使う</summary>
+    public IReadOnlyList<Vector3> StakeCenters { get { return stakeCenters; } }
 
     void Awake()
     {
@@ -183,5 +185,20 @@ public class TonboStakes : MonoBehaviour
         while (idx == lastStakeIndex && stakeCenters.Count > 1 && guard++ < 20) idx = Random.Range(0, stakeCenters.Count);
         lastStakeIndex = idx;
         center = stakeCenters[idx]; rot = stakeRots[idx];
+    }
+
+
+/// <summary>
+    /// 直前に ChooseStakePose で選んだ杭とは別の杭を1本ランダムに選び、その中心（トンボが止まる位置）を返す。
+    /// 杭が2本未満なら false。ハードモードの2匹目などに使う。
+    /// </summary>
+public bool ChooseOtherStakePose(out Vector3 center, out Quaternion rot)
+    {
+        center = Vector3.zero; rot = Quaternion.identity;
+        int n = stakeCenters.Count;
+        if (n < 2) return false;
+        int idx = (lastStakeIndex + 1 + Random.Range(0, n - 1)) % n; // lastStakeIndex 以外から一様に選ぶ
+        center = stakeCenters[idx]; rot = stakeRots[idx];
+        return true;
     }
 }

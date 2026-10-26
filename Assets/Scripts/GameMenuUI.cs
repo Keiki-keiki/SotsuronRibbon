@@ -1,10 +1,10 @@
 using UnityEngine;
 
 /// <summary>メニュー系の画面（ゲームの状態ではなく、どのボタン群を出すか）</summary>
-public enum MenuScreen { None, Title, Settings, ChooseType, Records }
+public enum MenuScreen { None, Title, Settings, ChooseType, ChooseMode, Records }
 
 /// <summary>メニューのボタン操作の結果（長押しが完了したボタン）</summary>
-public enum MenuAction { None, Play, Records, Settings, Back, Real, Cute }
+public enum MenuAction { None, Play, Records, Settings, Back, Real, Cute, Normal, Hard }
 
 /// <summary>
 /// タイトル・タイプ選択・記録・設定の各画面のボタン（横長キューブ）と設定パネルを担当する。
@@ -48,6 +48,9 @@ public class GameMenuUI : MonoBehaviour
     private HoldButton handButton;
     private HoldButton realButton;
     private HoldButton cuteButton;
+    private HoldButton normalButton;
+    private HoldButton hardButton;
+
     private HoldButton recReal;
     private HoldButton recCute;
     private HoldButton gameOverButton;
@@ -151,7 +154,18 @@ public class GameMenuUI : MonoBehaviour
             new Color(0.95f, 0.5f, 0.7f), new Color(1f, 0.85f, 0.92f));
     }
 
-    /// <summary>記録画面のリアル／可愛いの記録切り替えボタンを、最初に必要になったときに作る</summary>
+    /// <summary>ゲームモード選択画面（ノーマル=上 / ハード（2匹）=下）のボタンを、最初に必要になったときに作る</summary>
+    void EnsureModeButtons()
+    {
+        if (normalButton != null) return;
+        normalButton = MakeButton("NormalButton_" + gameObject.name, MenuButtonPos(0.5f), "ノーマル",
+            new Color(0.2f, 0.6f, 0.3f), new Color(0.4f, 1f, 0.5f));
+        hardButton = MakeButton("HardButton_" + gameObject.name, MenuButtonPos(-0.5f), "ハード（2匹）",
+            new Color(0.7f, 0.2f, 0.2f), new Color(1f, 0.45f, 0.4f));
+    }
+
+    
+/// <summary>記録画面のリアル／可愛いの記録切り替えボタンを、最初に必要になったときに作る</summary>
     void EnsureRecordButtons()
     {
         if (recReal != null) return;
@@ -174,6 +188,8 @@ public class GameMenuUI : MonoBehaviour
         if (screen == MenuScreen.Title || screen == MenuScreen.Settings) EnsureSettings();
         if (screen == MenuScreen.ChooseType) EnsureChoiceButtons();
         if (screen == MenuScreen.Records) EnsureRecordButtons();
+        if (screen == MenuScreen.ChooseMode) EnsureModeButtons();
+
 
         SetActive(startButton, screen == MenuScreen.Title);
         SetActive(recordButton, screen == MenuScreen.Title);
@@ -181,6 +197,9 @@ public class GameMenuUI : MonoBehaviour
         SetActive(backButton, screen == MenuScreen.Settings || screen == MenuScreen.Records);
         SetActive(realButton, screen == MenuScreen.ChooseType);
         SetActive(cuteButton, screen == MenuScreen.ChooseType);
+        SetActive(normalButton, screen == MenuScreen.ChooseMode);
+        SetActive(hardButton, screen == MenuScreen.ChooseMode);
+
         SetActive(recReal, screen == MenuScreen.Records);
         SetActive(recCute, screen == MenuScreen.Records);
         if (settingsPanel != null) settingsPanel.SetActive(screen == MenuScreen.Settings);
@@ -224,7 +243,13 @@ public class GameMenuUI : MonoBehaviour
                 }
                 return MenuAction.None;
 
-            case MenuScreen.ChooseType:
+            case MenuScreen.ChooseMode:
+                if (normalButton != null && normalButton.Tick(tip, buttonRadius, startHoldSeconds)) return MenuAction.Normal;
+                if (hardButton != null && hardButton.Tick(tip, buttonRadius, startHoldSeconds)) return MenuAction.Hard;
+                return MenuAction.None;
+
+            
+case MenuScreen.ChooseType:
                 if (realButton != null && realButton.Tick(tip, buttonRadius, startHoldSeconds)) return MenuAction.Real;
                 if (cuteButton != null && cuteButton.Tick(tip, buttonRadius, startHoldSeconds)) return MenuAction.Cute;
                 return MenuAction.None;

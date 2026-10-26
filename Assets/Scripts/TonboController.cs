@@ -40,6 +40,15 @@ public class TonboController : MonoBehaviour
     private GameObject realPrefab;
     private GameObject tonboInstance;
     private bool tonboRunning = false;
+    // ハードモード用の2匹目（見た目のみ。捕獲・スコア・進行にはまだ影響しない）
+    private GameObject tonbo2Instance;
+    private Vector3 tonbo2Start;
+    private Vector3 tonbo2End;
+    private Quaternion tonbo2Rot;
+    private float tonbo2Scale;
+
+
+
     private Vector3 tonboStart;
     private Vector3 tonboEnd;
     private Renderer[] tonboRenderers;
@@ -60,6 +69,18 @@ public class TonboController : MonoBehaviour
     public List<Color> VariantColors { get { return currentVariantColors; } }
     /// <summary>トンボが出ていて飛行中（または着地済み）か</summary>
     public bool IsActive { get { return tonboInstance != null && tonboRunning; } }
+    /// <summary>ハードモードの2匹目が出ているか。リングの表示判定に使う</summary>
+    public bool SecondActive { get { return tonbo2Instance != null && tonbo2Instance.activeSelf; } }
+    /// <summary>2匹目が止まる杭の位置（2つ目のリングの中心）</summary>
+    public Vector3 SecondStakePos { get { return tonbo2End; } }
+    /// <summary>2匹目が止まる杭の向き（2つ目のリングの向き）</summary>
+    public Quaternion SecondStakeRot { get { return tonbo2Rot; } }
+    /// <summary>2匹目のTransform（出ていなければnull）。虫籠でつかむ対象の候補</summary>
+    public Transform SecondTonboTransform { get { return tonbo2Instance != null && tonbo2Instance.activeSelf ? tonbo2Instance.transform : null; } }
+    /// <summary>2匹目の大きさ（Prefab倍率）</summary>
+    public float SecondScale { get { return tonbo2Scale; } }
+
+
     /// <summary>今出ているトンボのTransform（虫籠演出でつかむ対象。なければnull）</summary>
     public Transform TonboTransform { get { return tonboInstance != null && tonboInstance.activeSelf ? tonboInstance.transform : null; } }
     /// <summary>着地するまでは、リング表示となぞり判定を止めるための判定</summary>
@@ -85,6 +106,9 @@ public class TonboController : MonoBehaviour
         tonboInstance = null;
         tonboRenderers = null;
         tonboOriginalMats = null;
+        if (tonbo2Instance != null) Destroy(tonbo2Instance);
+        tonbo2Instance = null;
+
         foreach (var m in tonboTempMats) if (m != null) Destroy(m);
         tonboTempMats.Clear();
         tonboPrefab = p;
@@ -101,7 +125,10 @@ public class TonboController : MonoBehaviour
         }
         if (!tonboRunning || tonboInstance == null) return;
 
-        // トンボが杭に着地したら（何回目でも）カウントスタート
+        TickSecondTonbo();
+
+        
+// トンボが杭に着地したら（何回目でも）カウントスタート
         if (game.IsWaiting && Time.time - tonboFlightStartTime >= tonboFlightSeconds)
         {
             game.BeginPlaying();
@@ -126,10 +153,19 @@ public class TonboController : MonoBehaviour
         }
     }
 
-    public void Hide()
+    /// <summary>指定したトンボ（1=メイン、2=2匹目）だけを隠す。ハードモードで収納済みのトンボを消すのに使う</summary>
+    public void HideOne(int index)
+    {
+        if (index == 1) { if (tonboInstance != null) tonboInstance.SetActive(false); }
+        else if (index == 2) { if (tonbo2Instance != null) tonbo2Instance.SetActive(false); }
+    }
+
+    
+public void Hide()
     {
         tonboRunning = false;
         if (tonboInstance != null) tonboInstance.SetActive(false);
+        if (tonbo2Instance != null) tonbo2Instance.SetActive(false);
     }
 
     void StartTonbo()
@@ -169,9 +205,58 @@ public class TonboController : MonoBehaviour
         tonboInstance.SetActive(true);
         tonboFlightStartTime = Time.time;
         tonboRunning = true;
+        if (game.HardMode) StartSecondTonbo(toPlayer);
+        else if (tonbo2Instance != null) tonbo2Instance.SetActive(false);
+
     }
 
-    /// <summary>標準正規分布 N(0,1) に従う乱数（Box-Muller法）</summary>
+    /// <summary>ハードモード：メインとは別の杭に止まる2匹目を、メインと同じ向き・秒数で飛ばし始める（見た目のみ）</summary>
+    void StartSecondTonbo(Vector3 toPlayer)
+    {
+        TonboStakes stakes = GetComponent<TonboStakes>();
+        Vector3 stakePos;
+        if (stakes == null || !stakes.ChooseOtherStakePose(out stakePos, out tonbo2Rot))
+        {
+            if (tonbo2Instance != null) tonbo2Instance.SetActive(false);
+            return;
+        }
+        tonbo2End = stakePos;
+        tonbo2Start = tonbo2End - toPlayer * tonboStartDistance;
+        if (tonbo2Instance == null)
+        {
+            tonbo2Instance = Instantiate(tonboPrefab);
+            tonbo2Instance.name = "TonboRuntime2";
+        }
+        float s = tonboScale * Mathf.Clamp(Mathf.Exp(RandomGaussian() * tonboSizeSigma), tonboSizeMinMultiplier, tonboSizeMaxMultiplier);
+        tonbo2Scale = s;
+        tonbo2Instance.transform.localScale = Vector3.one * s;
+        tonbo2Instance.transform.SetPositionAndRotation(tonbo2Start, Quaternion.LookRotation(toPlayer, Vector3.up));
+        tonbo2Instance.SetActive(true);
+    }
+
+    /// <summary>2匹目の飛行。メインと同じ時間で杭へ飛び、着地したらその場に止まる</summary>
+    void TickSecondTonbo()
+    {
+        if (tonbo2Instance == null || !tonbo2Instance.activeSelf) return;
+        if (game.IsWaiting || game.IsPlaying)
+        {
+            float t = Mathf.Clamp01((Time.time - tonboFlightStartTime) / Mathf.Max(0.1f, tonboFlightSeconds));
+            Vector3 dir = (tonbo2End - tonbo2Start).normalized;
+            Vector3 side = Vector3.Cross(dir, Vector3.up).normalized;
+            float w = tonboWobble * (1f - t);
+            Vector3 pos = Vector3.Lerp(tonbo2Start, tonbo2End, t)
+                        + side * Mathf.Sin(Time.time * 4f + 1.7f) * w
+                        + Vector3.up * Mathf.Sin(Time.time * 5.3f + 0.9f) * w;
+            tonbo2Instance.transform.SetPositionAndRotation(pos, Quaternion.LookRotation(dir, Vector3.up));
+        }
+        else if (game.IsFailed)
+        {
+            tonbo2Instance.transform.position = tonbo2End;
+        }
+    }
+
+    
+/// <summary>標準正規分布 N(0,1) に従う乱数（Box-Muller法）</summary>
     float RandomGaussian()
     {
         float u1 = Mathf.Max(Random.value, 1e-6f);

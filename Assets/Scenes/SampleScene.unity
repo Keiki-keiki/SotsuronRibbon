@@ -1033,7 +1033,7 @@ MonoBehaviour:
   reachRadius: 0.7
   spawnRangeRight: 0.3
   spawnRangeUp: 0.55
-  spawnRangeDown: 0.15
+  spawnRangeDown: 0.1
   nextRingDelay: 1
   hudDistance: 0.65
   hudWidth: 800
@@ -1065,7 +1065,7 @@ MonoBehaviour:
   stakeMinSpacing: 0.6
   stakeWoodMargin: 0.3
   stakeDepthJitter: 0.1
-  stakeDepthSpread: 0.2
+  stakeDepthSpread: 0.3
   stakeNearOffset: 0.2
 --- !u!114 &827056175
 MonoBehaviour:
@@ -1171,6 +1171,7 @@ MonoBehaviour:
   cageWidthMargin: 1.3
   gapBelowTonbo: 0.03
   cageSideOffset: 0.35
+  cageStakeMargin: 0.05
   riseDistance: 0.3
   fadeSeconds: 0.7
   openDelay: 0.2
@@ -1179,7 +1180,9 @@ MonoBehaviour:
   minGrabRadius: 0.07
   releaseDwellSeconds: 0.6
   pinchThreshold: 0.8
-  catchTimeout: 20
+  catchTimeLimit: 10
+  escapeSeconds: 1.2
+  escapeDistance: 3
 --- !u!1 &883267041
 GameObject:
   m_ObjectHideFlags: 0

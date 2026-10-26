@@ -37,6 +37,8 @@ public class TonboCage : MonoBehaviour
     public float gapBelowTonbo = 0.03f;
     [Tooltip("虫かごの位置：トンボを基準に、プレイヤーから見て左右どちらか（生成ごとにランダム）へずらす距離（m）")]
     public float cageSideOffset = 0.35f;
+    [Tooltip("虫かごと杭の重なり判定の余白（m）。虫かごの範囲にこの分を足して、杭が入るかを見る")]
+    public float cageStakeMargin = 0.05f;
     [Tooltip("下から上がってくる距離（メートル）")]
     public float riseDistance = 0.3f;
     [Tooltip("フェードイン/アウトの秒数")]
@@ -75,6 +77,11 @@ public class TonboCage : MonoBehaviour
     private Vector3 landingPos;
     private Quaternion landingRot;
     private float waitStart;
+    // 捕獲対象（ハードモードでは気絶中のトンボから1匹ずつ選ぶ。1=メイン、2=2匹目）
+    private int targetIndex = 1;
+    private float targetScale;
+    private bool followUp; // 2匹目以降の捕獲か（逃げられてもスコア判定のEscapedは変えない）
+
 
     // 籠
     private GameObject cage;
@@ -95,6 +102,9 @@ public class TonboCage : MonoBehaviour
     private bool heldByStick;
     private Vector3 releaseFromLocal;
     private Vector3 releaseToLocal;
+    private Quaternion releaseFromRot;
+    private Quaternion releaseToRot;
+
     private float closeStart;
     private float sinkStart;
     private Vector3 sinkFrom;
@@ -106,7 +116,17 @@ public class TonboCage : MonoBehaviour
 
     public bool Available
     {
-        get { return cagePrefab != null && cageClip != null && tonbo != null && tonbo.TonboTransform != null; }
+        get
+        {
+            if (cagePrefab == null || cageClip == null || tonbo == null) return false;
+            if (game != null && game.HardMode)
+            {
+                // ハード：トンボ1に依存せず、PickTarget が Stunned のトンボ（1または2）を選べるときだけ使える
+                int idx; Transform tf; float sc;
+                return PickTarget(out idx, out tf, out sc);
+            }
+            return tonbo.TonboTransform != null; // ノーマル：従来どおり
+        }
     }
 
     void Awake()
@@ -116,10 +136,22 @@ public class TonboCage : MonoBehaviour
     }
 
     /// <summary>回しに成功した直後に呼ぶ。トンボは杭に止まったまま、つかまれるのを待つ</summary>
-    public void BeginCatch()
+public void BeginCatch()
     {
         if (tonbo == null) tonbo = GetComponent<TonboController>();
-        tonboTf = tonbo.TonboTransform;
+        followUp = false;
+        int idx; Transform tf; float sc;
+        bool picked = PickTarget(out idx, out tf, out sc);
+        if (game != null && game.HardMode && !picked) return; // ハード：Stunned のトンボがいなければ捕獲しない（Flying・Stored は対象外）
+        StartCatchOn(idx, tf, sc);
+    }
+
+    /// <summary>指定したトンボを捕獲対象にして、つかまれるのを待つ状態に入る（虫かごは常に1つ）</summary>
+    void StartCatchOn(int idx, Transform tf, float scale)
+    {
+        targetIndex = idx;
+        tonboTf = tf;
+        targetScale = scale;
         landingPos = tonboTf.position;
         landingRot = tonboTf.rotation;
         waitStart = Time.time;
@@ -129,6 +161,44 @@ public class TonboCage : MonoBehaviour
         dwell = 0f;
         phase = Phase.WaitGrab;
         if (cage == null) BuildCage(tonboTf.position);
+    }
+
+    /// <summary>
+    /// 捕獲対象を選ぶ。ノーマルモードは常に1匹目。ハードモードでは Stunned のトンボだけが候補で、
+    /// 両方 Stunned なら虫かごに近い方（虫かごがまだ無いときは、捕獲のきっかけになった1匹目の位置を基準にする）。
+    /// 候補があれば true、なければ（従来どおり1匹目を返して）false。
+    /// </summary>
+    bool PickTarget(out int idx, out Transform tf, out float scale)
+    {
+        idx = 1; tf = tonbo.TonboTransform; scale = tonbo.CurrentScale;
+        if (game == null || !game.HardMode) return false;
+
+        Transform t2 = tonbo.SecondTonboTransform;
+        bool c1 = tf != null && game.Tonbo1State == RotationBurstGame.TonboState.Stunned;
+        bool c2 = t2 != null && game.Tonbo2State == RotationBurstGame.TonboState.Stunned;
+        if (!c1 && !c2) return false;
+
+        bool pick2 = c2 && !c1;
+        if (c1 && c2)
+        {
+            Vector3 refPos = (cage != null && frameRenderers != null) ? FrameBounds().center : tf.position;
+            pick2 = Vector3.Distance(t2.position, refPos) < Vector3.Distance(tf.position, refPos);
+        }
+        if (pick2) { idx = 2; tf = t2; scale = tonbo.SecondScale; }
+        return true;
+    }
+
+    /// <summary>収納が終わったあと、まだ Stunned のトンボがいれば、収納済みを隠して虫かごを作り直し、次の1匹へ進む</summary>
+    bool TryStartNextCatch()
+    {
+        int idx; Transform tf; float sc;
+        if (!PickTarget(out idx, out tf, out sc) || idx == targetIndex) return false;
+        tonboTf.SetParent(null, true);
+        tonbo.HideOne(targetIndex);
+        DestroyCage();
+        followUp = true;
+        StartCatchOn(idx, tf, sc);
+        return true;
     }
 
     /// <summary>毎フレーム呼ぶ。演出がすべて終わったら true を返す</summary>
@@ -161,7 +231,7 @@ public class TonboCage : MonoBehaviour
         }
 
         SampleHands(stickTip);
-        float radius = Mathf.Max(minGrabRadius, tonboWingspanAtScale1 * tonbo.CurrentScale * grabRadiusScale);
+        float radius = Mathf.Max(minGrabRadius, tonboWingspanAtScale1 * targetScale * grabRadiusScale);
         foreach (var p in pts)
         {
             if (grabMode == GrabMode.Pinch && !p.pinching) continue;
@@ -231,20 +301,71 @@ public class TonboCage : MonoBehaviour
     }
 
     // ---------------- 籠に入れて閉じる ----------------
-    void ReleaseIntoCage()
+void ReleaseIntoCage()
     {
-        // 籠の中央へ（籠の子にして一緒に下がる）
+        // 籠の子にして一緒に下がる。向きと位置は、はみ出しが最小になるように決める
         tonboTf.SetParent(cage.transform, true);
         releaseFromLocal = tonboTf.localPosition;
-        releaseToLocal = cage.transform.InverseTransformPoint(FrameBounds().center);
+        releaseFromRot = tonboTf.localRotation;
+        FitTonboInCage(out releaseToLocal, out releaseToRot);
+        if (game != null) game.MarkTonboStored(targetIndex); // ハードモード：虫かごに入れたトンボ（今は1匹目のみ）を Stunned→Stored
+
         closeStart = Time.time;
         phase = Phase.Closing;
+    }
+
+    /// <summary>
+    /// 籠の軸に揃えた状態で、トンボを水平に15度刻みで回してはみ出し量が最小の向きを選び、
+    /// メッシュ範囲の中心を籠の枠中心に合わせた収納姿勢（ローカル位置・回転）を返す。サイズは変えない。
+    /// </summary>
+    void FitTonboInCage(out Vector3 toLocal, out Quaternion toRot)
+    {
+        Transform ct = cage.transform;
+        Quaternion keepCageRot = ct.rotation;
+        Vector3 keepPos = tonboTf.localPosition;
+        Quaternion keepRot = tonboTf.localRotation;
+
+        ct.rotation = Quaternion.identity; // 籠の軸を世界軸に揃えて測る（子のトンボも一緒に回る）
+        Bounds cb = FrameBounds();
+        float innerX = cb.size.x * 0.9f, innerZ = cb.size.z * 0.9f; // 枠の太さ分を除いた内寸の目安
+
+        float bestScore = float.MaxValue; float bestYaw = 0f;
+        for (int a = 0; a < 360; a += 15)
+        {
+            float yaw = a > 180 ? a - 360 : a;
+            tonboTf.localRotation = Quaternion.AngleAxis(yaw, Vector3.up) * keepRot;
+            Bounds tb = TonboBounds();
+            float score = Mathf.Max(0f, tb.size.x - innerX) + Mathf.Max(0f, tb.size.z - innerZ) + 0.0005f * Mathf.Abs(yaw);
+            if (score < bestScore) { bestScore = score; bestYaw = yaw; }
+        }
+
+        tonboTf.localRotation = Quaternion.AngleAxis(bestYaw, Vector3.up) * keepRot;
+        toRot = tonboTf.localRotation;
+        Vector3 worldDelta = cb.center - TonboBounds().center; // メッシュ中心を籠の中心へ
+        toLocal = keepPos + ct.InverseTransformVector(worldDelta);
+
+        tonboTf.localPosition = keepPos; tonboTf.localRotation = keepRot; // 測定のために動かした分を戻す
+        ct.rotation = keepCageRot;
+    }
+
+    Bounds TonboBounds()
+    {
+        Bounds b = new Bounds(tonboTf.position, Vector3.zero);
+        bool first = true;
+        foreach (var r in tonboTf.GetComponentsInChildren<Renderer>())
+        {
+            if (!(r is MeshRenderer) && !(r is SkinnedMeshRenderer)) continue;
+            if (first) { b = r.bounds; first = false; } else b.Encapsulate(r.bounds);
+        }
+        return b;
     }
 
     void TickClosing()
     {
         float k = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((Time.time - closeStart) / 0.4f));
         tonboTf.localPosition = Vector3.Lerp(releaseFromLocal, releaseToLocal, k);
+        tonboTf.localRotation = Quaternion.Slerp(releaseFromRot, releaseToRot, k);
+
 
         float closeLen = Mathf.Max(0.1f, cageClip.length - closeStartTime);
         float t = closeStartTime + (Time.time - closeStart);
@@ -257,20 +378,25 @@ public class TonboCage : MonoBehaviour
         }
     }
 
-    bool TickSinking()
+bool TickSinking()
     {
         float k = Mathf.Clamp01((Time.time - sinkStart) / Mathf.Max(0.05f, fadeSeconds));
         float e = Mathf.SmoothStep(0f, 1f, k);
         cage.transform.position = sinkFrom + Vector3.down * riseDistance * e;
         SetAlpha(1f - e);
-        if (k >= 1f) { Finish(); return true; }
+        if (k >= 1f)
+        {
+            if (TryStartNextCatch()) return false; // ハードモード：まだ気絶中のトンボがいれば続けて次の1匹へ
+            Finish();
+            return true;
+        }
         return false;
     }
 
     /// <summary>制限時間切れ：トンボがプレイヤーと反対の斜め上へ飛び去り、籠は下へ消える</summary>
     void StartEscape()
     {
-        Escaped = true;
+        if (!followUp) Escaped = true; // 2匹目以降で逃げられても、スコア判定は1匹目の結果のまま
         tonboTf.SetParent(null, true);
         escapeFrom = tonboTf.position;
         Vector3 away = -game.DirToHead(escapeFrom);
@@ -298,7 +424,13 @@ public class TonboCage : MonoBehaviour
     
 void Finish()
     {
-        if (tonboTf != null) tonboTf.SetParent(null, true);
+        if (tonboTf != null) tonboTf.SetParent(null, true); // 籠を消す前に親から外す（籠と一緒に消えないように）
+        // ハード：収納済みのトンボだけを非表示にする（逃げられたトンボ・もう1匹には触らない）
+        if (game != null && game.HardMode && tonbo != null)
+        {
+            RotationBurstGame.TonboState st = (targetIndex == 2) ? game.Tonbo2State : game.Tonbo1State;
+            if (st == RotationBurstGame.TonboState.Stored) tonbo.HideOne(targetIndex);
+        }
         DestroyCage();
         phase = Phase.Idle;
     }
@@ -331,7 +463,7 @@ void Finish()
 
         Bounds b0 = CombinedBounds();
         float width = Mathf.Max(b0.size.x, b0.size.z);
-        float want = tonboWingspanAtScale1 * tonbo.CurrentScale * cageWidthMargin;
+        float want = tonboWingspanAtScale1 * targetScale * cageWidthMargin;
         cageScale = want / Mathf.Max(0.01f, width);
         cage.transform.localScale = Vector3.one * cageScale;
 
@@ -353,7 +485,30 @@ void Finish()
             if (toTonbo.sqrMagnitude > 1e-4f) side = Vector3.Cross(Vector3.up, toTonbo.normalized); // プレイヤーから見た右方向
         }
         float sideSign = UnityEngine.Random.value < 0.5f ? -1f : 1f;
+        float towardPlayer = 0f; // 左右とも杭と重なるときだけ、プレイヤー側へ寄せる距離（m）
+        // 左右2候補のうち、杭と重ならない側があればそちらを採用（両方空き・両方重なりのときは上のランダムのまま）
+        {
+            bool plusBlocked = CageOverlapsStake(tonboPos + side * cageSideOffset, tonboPos, b);
+            bool minusBlocked = CageOverlapsStake(tonboPos - side * cageSideOffset, tonboPos, b);
+            if (plusBlocked != minusBlocked) sideSign = plusBlocked ? -1f : 1f;
+            else if (plusBlocked && minusBlocked)
+            {
+                // 左右とも重なる：プレイヤー側へ0.1m、だめなら0.2m寄せた左右候補で再判定し、最初に重ならなかった候補を採用
+                float[] pullSteps = { 0.1f, 0.2f };
+                for (int ps = 0; ps < pullSteps.Length; ps++)
+                {
+                    Vector3 pull = toHead * pullSteps[ps];
+                    bool pBlocked = CageOverlapsStake(tonboPos + side * cageSideOffset + pull, tonboPos, b);
+                    bool mBlocked = CageOverlapsStake(tonboPos - side * cageSideOffset + pull, tonboPos, b);
+                    if (pBlocked && mBlocked) continue;
+                    if (pBlocked != mBlocked) sideSign = pBlocked ? -1f : 1f; // 片方だけ空き→空いている側（両方空きなら上のランダムのまま）
+                    towardPlayer = pullSteps[ps];
+                    break;
+                }
+            }
+        }
         Vector3 cageXZ = tonboPos + side * cageSideOffset * sideSign;
+        cageXZ += toHead * (towardPlayer + 0.1f); // 左右とも重なったときだけ、プレイヤー側へ寄せた分を足す（通常は0）
         Vector3 delta = new Vector3(cageXZ.x - b.center.x, (tonboPos.y - gapBelowTonbo) - b.max.y, cageXZ.z - b.center.z);
         cage.transform.position += delta;
         cageTarget = cage.transform.position;
@@ -435,6 +590,29 @@ void Finish()
     }
 
     Bounds FrameBounds() { return CombinedBounds(); }
+
+    /// <summary>
+    /// 虫かごの中心を cageCenter に置いたとき、杭と重なるか。
+    /// 水平：虫かごの範囲（b）＋余白の中に杭がある。高さ：杭の先端（杭の位置の0.04m下）が虫かごの下端より上にある。
+    /// トンボ自身の杭は左右どちらでも同じ距離で選択に影響しないので除外する。
+    /// </summary>
+    bool CageOverlapsStake(Vector3 cageCenter, Vector3 tonboPos, Bounds b)
+    {
+        TonboStakes stakes = GetComponent<TonboStakes>();
+        if (stakes == null) return false;
+        float cageBottom = (tonboPos.y - gapBelowTonbo) - b.size.y;
+        var list = stakes.StakeCenters;
+        for (int i = 0; i < list.Count; i++)
+        {
+            Vector3 s = list[i];
+            float ox = s.x - tonboPos.x, oz = s.z - tonboPos.z;
+            if (ox * ox + oz * oz < 0.05f * 0.05f) continue; // トンボ自身の杭
+            if (s.y - 0.04f < cageBottom) continue;          // 杭の先端が虫かごの下端より低い＝重ならない
+            if (Mathf.Abs(s.x - cageCenter.x) <= b.extents.x + cageStakeMargin
+                && Mathf.Abs(s.z - cageCenter.z) <= b.extents.z + cageStakeMargin) return true;
+        }
+        return false;
+    }
 
     /// <summary>籠の口（蓋の下〜上）の範囲にトンボがあるか</summary>
     bool InsideZone(Vector3 p)

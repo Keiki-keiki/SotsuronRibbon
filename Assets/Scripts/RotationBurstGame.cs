@@ -39,6 +39,11 @@ public class RotationBurstGame : MonoBehaviour
     [Header("クリア条件")]
     [Tooltip("挑戦1回あたりの制限時間（秒）")]
     public float sessionTimeLimit = 7f;
+    [Tooltip("ハードモードの制限時間（秒）。ノーマルは上の sessionTimeLimit を使う")]
+    public float hardSessionTimeLimit = 14f;
+    /// <summary>現在のモードの制限時間（ハード=hardSessionTimeLimit / ノーマル=sessionTimeLimit）</summary>
+    private float TimeLimit { get { return hardMode ? hardSessionTimeLimit : sessionTimeLimit; } }
+
     [Tooltip("「速い回転」と判定する時間窓（秒）")]
     public float burstWindowSeconds = 1f;
     [Tooltip("burstWindowSeconds以内に必要な回転数")]
@@ -105,6 +110,8 @@ public class RotationBurstGame : MonoBehaviour
     // トンボ処理は TonboController.cs に分離
 
     private LineRenderer lr;
+    private LineRenderer lr2; // ハードモード用の2つ目のリング（表示のみ。判定はまだ1つ目だけ）
+
     private AudioSource audioSource;
     private Text uiText;
 
@@ -133,7 +140,7 @@ public class RotationBurstGame : MonoBehaviour
     private static readonly Color colorFail = new Color(1f, 0.3f, 0.3f);  // 失敗
 
 
-    private enum GameState { Title, Settings, ChooseType, Records, Waiting, Playing, Cleared, Failed }
+    private enum GameState { Title, Settings, ChooseType, ChooseMode, Records, Waiting, Playing, Cleared, Failed }
     private GameState state = GameState.Title;
     private GameObject titleLogo;
     private TonboStakes stakes; // 杭の生成・配置・プレイヤー前進は TonboStakes.cs に分離
@@ -151,6 +158,66 @@ public class RotationBurstGame : MonoBehaviour
     private readonly Queue<float> rotationTimestamps = new Queue<float>();
     private bool burstQualifiedLastFrame = false;
     private int burstCount = 0;
+
+    // ---- ハードモード用：リング2の独立した判定状態（リング1は上の既存フィールドをそのまま使う） ----
+    private class RingJudge
+    {
+        public float lastAngle = float.NaN;
+        public float cumulativeAngle = 0f;
+        public int rotationsCounted = 0;
+        public readonly Queue<float> rotationTimestamps = new Queue<float>();
+        public bool burstQualifiedLastFrame = false;
+        public int burstCount = 0;
+        public void Reset()
+        {
+            lastAngle = float.NaN; cumulativeAngle = 0f; rotationsCounted = 0;
+            rotationTimestamps.Clear(); burstQualifiedLastFrame = false; burstCount = 0;
+        }
+    }
+    private readonly RingJudge ring2 = new RingJudge();
+    // ハード：捕獲演出中にリングが成功した場合の保留フラグ（虫かごが空いた時点で気絶化＋捕獲を開始する）
+    private bool pendingCatch1 = false;
+    private bool pendingCatch2 = false;
+
+    // ハード：捕獲演出中も制限時間（sessionStartTime基準）は止めない
+    /// <summary>ハードモードで、両方のトンボが Stored になったか</summary>
+    public bool AllTonboStored { get { return hardMode && Tonbo1State == TonboState.Stored && Tonbo2State == TonboState.Stored; } }
+
+
+    // ---- ハードモード用：トンボごとの状態（ノーマルでは更新しない）。1=メインのトンボ、2=2匹目 ----
+    public enum TonboState { Flying, Stunned, Stored }
+    public TonboState Tonbo1State { get; private set; }
+    public TonboState Tonbo2State { get; private set; }
+
+    /// <summary>リング成功：Flying→Stunned（ハードモードのときだけ）</summary>
+    void MarkTonboStunned(int tonboIndex)
+    {
+        if (!hardMode) return;
+        if (tonboIndex == 1 && Tonbo1State == TonboState.Flying) Tonbo1State = TonboState.Stunned;
+        else if (tonboIndex == 2 && Tonbo2State == TonboState.Flying) Tonbo2State = TonboState.Stunned;
+    }
+
+    /// <summary>虫かごに入れた：Stunned→Stored（ハードモードのときだけ。TonboCage から呼ぶ）</summary>
+    public void MarkTonboStored(int tonboIndex)
+    {
+        if (!hardMode) return;
+        if (tonboIndex == 1 && Tonbo1State == TonboState.Stunned) Tonbo1State = TonboState.Stored;
+        else if (tonboIndex == 2 && Tonbo2State == TonboState.Stunned) Tonbo2State = TonboState.Stored;
+    }
+
+    void ResetTonboStates()
+    {
+        Tonbo1State = TonboState.Flying;
+        Tonbo2State = TonboState.Flying;
+    }
+
+    /// <summary>リング1のバースト達成数が必要数に達したか</summary>
+    public bool Ring1Success { get { return burstCount >= requiredBursts; } }
+    /// <summary>リング2のバースト達成数が必要数に達したか（ハードモードのときだけ）</summary>
+    public bool Ring2Success { get { return hardMode && ring2.burstCount >= requiredBursts; } }
+    /// <summary>両方のリングが成功したか（ハードモードのときだけ）</summary>
+    public bool BothRingsSuccess { get { return Ring1Success && Ring2Success; } }
+
 
     // リセットボタン関連
     private float resetHoldTimer = 0f;
@@ -450,6 +517,27 @@ void EnterChoose()
 
     // （記録画面の切り替えボタンは GameMenuUI 側）
 
+    // ===== ゲームモード選択（ノーマル / ハード（2匹）） =====
+    // ハードの2匹出現は未実装。今は選択結果の保存だけ行い、どちらも1匹で開始する
+    private const string HardModeKey = "Game_HardMode";
+    private bool hardMode = false;
+    public bool HardMode { get { return hardMode; } }
+
+    void SetHardMode(bool hard)
+    {
+        hardMode = hard;
+        PlayerPrefs.SetInt(HardModeKey, hardMode ? 1 : 0);
+    }
+
+    /// <summary>トンボのタイプを選んだ後に出る、ゲームモード選択画面（ノーマル=上 / ハード=下）</summary>
+    void EnterChooseMode()
+    {
+        state = GameState.ChooseMode;
+        menu.Show(MenuScreen.ChooseMode);
+        UpdateStatusText();
+    }
+
+
 
 
     // ===== 設定画面（BGM・効果音・画面の明るさを、棒の先端でスライドして調整） =====
@@ -482,7 +570,9 @@ void EnterSettings()
                 if (state == GameState.Waiting || state == GameState.Playing) lr.enabled = true;
             }
         }
-        if (!ready) return;
+        UpdateSecondRing();
+        
+if (!ready) return;
         // リセットボタンは状態に関係なく常にチェックする（いつでも強制リセット可能）
         // メニュー系の画面（記録・設定・タイプ選択・オープニング）は、ボタンの長押し操作だけを処理する
         if (state == GameState.Records)
@@ -511,14 +601,27 @@ void EnterSettings()
         {
             switch (menu.Tick(MenuScreen.ChooseType, tipTransform))
             {
-                case MenuAction.Real: SetMode(false); StartGame(); break;
-                case MenuAction.Cute: SetMode(true); StartGame(); break;
+                case MenuAction.Real: SetMode(false); EnterChooseMode(); break;
+                case MenuAction.Cute: SetMode(true); EnterChooseMode(); break;
             }
             UpdateStatusText();
             return;
         }
 
-        // オープニング画面：プレイ・記録・設定のボタンだけを処理する
+        // ゲームモード選択画面：ノーマルかハードに触れ続けたら、そのモードでゲーム開始（ハードの2匹は未実装＝今は1匹）
+        if (state == GameState.ChooseMode)
+        {
+            switch (menu.Tick(MenuScreen.ChooseMode, tipTransform))
+            {
+                case MenuAction.Normal: SetHardMode(false); StartGame(); break;
+                case MenuAction.Hard: SetHardMode(true); StartGame(); break;
+            }
+            UpdateStatusText();
+            return;
+        }
+
+        
+// オープニング画面：プレイ・記録・設定のボタンだけを処理する
         if (state == GameState.Title)
         {
             switch (menu.Tick(MenuScreen.Title, tipTransform))
@@ -537,10 +640,32 @@ void EnterSettings()
         { TonboCage tonboCage = GetComponent<TonboCage>(); if (tonboCage != null && tonboCage.enabled) cageFinished = tonboCage.Tick(tipTransform); } // 手で掴む虫籠演出
 
 
-        if (state == GameState.Cleared)
+        if (hardMode && state == GameState.Playing && AllTonboStored) { state = GameState.Cleared; flashUntil = Time.time + 0.3f; } // ハード：両方収納済みで初めてクリア
+
+        
+if (state == GameState.Cleared)
         {
-            if (Time.time >= flashUntil) SetColor(colorClear);
-            if (cageFinished) { TonboCage cageForScore = GetComponent<TonboCage>(); if (!(cageForScore != null && cageForScore.enabled && cageForScore.Escaped)) { score++; if (score > bestScore) { bestScore = score; PlayerPrefs.SetInt(BestScoreKey, bestScore); PlayerPrefs.Save(); } } HideTonbo(); SpawnNextRing(); } // TonboCage の演出が終わった（Tick が true）フレームで次のリングへ
+            if (Time.time >= flashUntil) SetColor((!hardMode || Ring1Success) ? colorClear : (Ring1Touched() ? colorTouching : colorNormal)); // ハード：リング1の色はリング1の成功状態だけで決める
+            if (HardTimeUp()) { FailByTimeout(); UpdateStatusText(); return; }
+            if (hardMode && tipTransform != null) { TickSecondRing(); TickRing1WhileCleared(); } // ハード：捕獲演出中も、未成功（Flying）のリングだけ判定を続ける // ハード：捕獲演出中でも制限時間内に両方収納できなければゲームオーバー
+            
+if (cageFinished)
+            {
+                TonboCage cageForScore = GetComponent<TonboCage>();
+                bool escaped = (cageForScore != null && cageForScore.enabled && cageForScore.Escaped);
+                if (hardMode && !AllTonboStored && !escaped)
+                {
+                    // ハード：片方だけ収納済み。ゲーム続行（制限時間は止めない）
+                    if (BeginPendingCatch()) { UpdateStatusText(); return; } // 捕獲演出中に成功していたリングがあれば、そのトンボの捕獲を続けて開始
+                    lastAngle = float.NaN;
+                    state = GameState.Playing;
+                }
+                else
+                {
+                    if (!escaped) { score++; if (score > bestScore) { bestScore = score; PlayerPrefs.SetInt(BestScoreKey, bestScore); PlayerPrefs.Save(); } }
+                    HideTonbo(); SpawnNextRing();
+                }
+            }
             UpdateStatusText();
             return;
         }
@@ -566,7 +691,23 @@ void EnterSettings()
             return;
         }
 
-        Vector3 local = Quaternion.Inverse(transform.rotation) * (tipTransform.position - transform.position);
+        TickSecondRing(); // ハードモードのときだけ、リング2を独立して判定する（リング1の処理は以下のまま）
+        if (state == GameState.Cleared) { UpdateStatusText(); return; } // リング2成功で捕獲が始まったフレームは、リング1の判定をしない
+
+
+        
+if (hardMode && Tonbo1State != TonboState.Flying)
+        {
+            // ハード：トンボ1が気絶・収納済みなら、リング1は再判定しない（トンボ2のリング2は上のTickSecondRingで継続）
+            lastAngle = float.NaN;
+            if (Time.time >= flashUntil) SetColor(colorClear);
+            CheckTimeout();
+            UpdateStatusText();
+            return;
+        }
+
+        
+Vector3 local = Quaternion.Inverse(transform.rotation) * (tipTransform.position - transform.position);
 
         // 奥行き方向：固定許容誤差
         bool outOfBounds = Mathf.Abs(local.y) > depthTolerance;
@@ -659,17 +800,36 @@ void EnterSettings()
     /// </summary>
 
 
-    void CheckTimeout()
+void CheckTimeout()
     {
         if (state != GameState.Playing || float.IsNaN(sessionStartTime)) return;
 
         float elapsed = Time.time - sessionStartTime;
-        if (elapsed >= sessionTimeLimit && burstCount < requiredBursts)
+        // ノーマル：従来どおり / ハード：制限時間内に両方 Stored になっていなければ失敗
+        bool unfinished = hardMode ? !AllTonboStored : (burstCount < requiredBursts);
+        if (elapsed >= TimeLimit && unfinished)
         {
             state = GameState.Failed;
             failedTime = Time.time;
         }
     }
+
+/// <summary>ハードモード：制限時間を過ぎたのに、まだ両方 Stored になっていないか（捕獲演出中の判定用）</summary>
+    bool HardTimeUp()
+    {
+        return hardMode && !AllTonboStored && !float.IsNaN(sessionStartTime)
+            && Time.time - sessionStartTime >= TimeLimit;
+    }
+
+    /// <summary>捕獲演出中のタイムアップ：虫かごを消してゲームオーバーにする</summary>
+    void FailByTimeout()
+    {
+        TonboCage cage = GetComponent<TonboCage>();
+        if (cage != null && cage.enabled) cage.Abort();
+        state = GameState.Failed;
+        failedTime = Time.time;
+    }
+
 
 void ResetGame()
     {
@@ -691,6 +851,10 @@ void ResetRingProgress()
         rotationsCounted = 0;
         sessionStartTime = float.NaN;
         rotationTimestamps.Clear();
+        ring2.Reset(); pendingCatch1 = false; pendingCatch2 = false;
+        ResetTonboStates();
+
+
         burstQualifiedLastFrame = false;
         burstCount = 0;
         flashUntil = -1f;
@@ -698,6 +862,7 @@ void ResetRingProgress()
 
 void OnRingCleared()
     {
+        MarkTonboStunned(1); // ハードモード：リング1成功→トンボ1は Flying→Stunned
         records.RecordCaught();
         if (!TryBeginMushikago()) HideTonbo(); // 虫籠演出を始められないときは従来どおりトンボを隠す
         state = GameState.Cleared;
@@ -819,7 +984,207 @@ public void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
         }
     }
 
-    void UpdateLinePositions()
+    /// <summary>
+    /// ハードモードのときだけ、2匹目の杭に2つ目のリングを出す（表示のみ）。
+    /// 1つ目のリングが表示されている間（着地後〜）だけ、2匹目が出ていれば表示する。
+    /// </summary>
+    void UpdateSecondRing()
+    {
+        bool show = hardMode && lr != null && lr.enabled && tonbo != null && tonbo.SecondActive;
+        if (!show) { if (lr2 != null && lr2.enabled) lr2.enabled = false; return; }
+
+        if (lr2 == null)
+        {
+            GameObject go = new GameObject("Ring2_" + gameObject.name);
+            lr2 = go.AddComponent<LineRenderer>();
+            lr2.loop = true;
+            lr2.positionCount = segments;
+            lr2.useWorldSpace = true;
+            lr2.material = lr.material;
+            lr2.startWidth = thicknesHalf * 2f;
+            lr2.endWidth = thicknesHalf * 2f;
+            Color c = colorNormal; c.a = ringAlpha;
+            lr2.startColor = c;
+            lr2.endColor = c;
+        }
+        lr2.enabled = true;
+        { Color rc = colorNormal; if (Ring2Success) rc = colorClear; else if (Ring2Touched()) rc = colorTouching; rc.a = ringAlpha; lr2.startColor = rc; lr2.endColor = rc; } // リング2の色はリング2の状態だけで決める（成功=緑 / なぞり中=青）
+        Vector3 center = tonbo.SecondStakePos;
+        Quaternion rot = tonbo.SecondStakeRot;
+        for (int i = 0; i < segments; i++)
+        {
+            float rad = 2f * Mathf.PI * i / segments;
+            lr2.SetPosition(i, center + rot * new Vector3(Mathf.Cos(rad) * ringRadius, 0f, Mathf.Sin(rad) * ringRadius));
+        }
+    }
+
+/// <summary>表示専用：棒の先端がリング2をなぞれる範囲にあるか（TickSecondRing と同じ条件。判定には使わない）</summary>
+    bool Ring2Touched()
+    {
+        if (tipTransform == null || tonbo == null || !tonbo.SecondActive) return false;
+        if (state != GameState.Playing && state != GameState.Waiting && state != GameState.Cleared) return false;
+        Vector3 local = Quaternion.Inverse(tonbo.SecondStakeRot) * (tipTransform.position - tonbo.SecondStakePos);
+        float distFromRing = Mathf.Abs(new Vector2(local.x, local.z).magnitude - ringRadius);
+        return Mathf.Abs(local.y) <= depthTolerance && distFromRing <= thicknesHalf;
+    }
+
+/// <summary>表示専用：棒の先端がリング1をなぞれる範囲にあるか（リング1の判定と同じ条件。判定には使わない）</summary>
+    bool Ring1Touched()
+    {
+        if (tipTransform == null) return false;
+        Vector3 local = Quaternion.Inverse(transform.rotation) * (tipTransform.position - transform.position);
+        float distFromRing = Mathf.Abs(new Vector2(local.x, local.z).magnitude - ringRadius);
+        return Mathf.Abs(local.y) <= depthTolerance && distFromRing <= thicknesHalf;
+    }
+
+
+
+    
+/// <summary>
+    /// ハードモードのときだけ、リング2のなぞり判定を行う（リング1と同じ条件・同じ数え方で、状態だけ独立）。
+    /// 結果は ring2 に溜めるだけで、捕獲・スコア・ゲーム進行にはまだ使わない。
+    /// </summary>
+    void TickSecondRing()
+    {
+        if (!hardMode || (state != GameState.Playing && state != GameState.Waiting && state != GameState.Cleared) || tipTransform == null || tonbo == null || !tonbo.SecondActive)
+        {
+            ring2.lastAngle = float.NaN;
+            return;
+        }
+        if (ring2.burstCount >= requiredBursts) return; // 成功済み（次のリングまで状態を保持）
+        if (Tonbo2State != TonboState.Flying) return; // 気絶・収納済みのトンボ2はリング判定しない
+
+
+        Vector3 local = Quaternion.Inverse(tonbo.SecondStakeRot) * (tipTransform.position - tonbo.SecondStakePos);
+        float distFromRing = Mathf.Abs(new Vector2(local.x, local.z).magnitude - ringRadius);
+        if (Mathf.Abs(local.y) > depthTolerance || distFromRing > thicknesHalf)
+        {
+            ring2.lastAngle = float.NaN; // 外れている間は角度追跡だけリセット
+            return;
+        }
+
+        float angle = Mathf.Atan2(local.z, local.x) * Mathf.Rad2Deg;
+        if (!float.IsNaN(ring2.lastAngle))
+        {
+            float delta = Mathf.Abs(Mathf.DeltaAngle(ring2.lastAngle, angle));
+            if (delta > 0f)
+            {
+                if (state == GameState.Waiting) { state = GameState.Playing; sessionStartTime = Time.time; } // リング2を先になぞった場合も、リング1と同じく制限時間を開始
+                
+ring2.cumulativeAngle += delta;
+                int newRotations = Mathf.FloorToInt(ring2.cumulativeAngle / 360f);
+                while (ring2.rotationsCounted < newRotations)
+                {
+                    ring2.rotationsCounted++;
+                    ring2.rotationTimestamps.Enqueue(Time.time);
+                }
+                while (ring2.rotationTimestamps.Count > 0 && Time.time - ring2.rotationTimestamps.Peek() > burstWindowSeconds)
+                    ring2.rotationTimestamps.Dequeue();
+
+                bool qualifiedNow = ring2.rotationTimestamps.Count >= rotationsPerBurst;
+                if (qualifiedNow && !ring2.burstQualifiedLastFrame)
+                {
+                    ring2.burstCount++;
+                    if (ring2.burstCount >= requiredBursts)
+                    {
+                        if (state == GameState.Cleared) pendingCatch2 = true; // 捕獲演出中：虫かごが空いてから気絶化＋捕獲
+                        else { MarkTonboStunned(2); OnSecondRingCleared(); }
+                    } // リング2成功→トンボ2は Flying→Stunned、捕獲を開始
+                }
+                ring2.burstQualifiedLastFrame = qualifiedNow;
+            }
+        }
+        ring2.lastAngle = angle;
+    }
+
+/// <summary>
+    /// ハードモード：リング2成功で、トンボ2の捕獲を開始する（対象は TonboCage.PickTarget が Stunned のトンボから選ぶ）。
+    /// 捕獲中（state==Cleared）は判定自体が止まっているため、虫かごが二重に出ることはない。
+    /// </summary>
+    void OnSecondRingCleared()
+    {
+        if (!hardMode || state != GameState.Playing) return;
+        TonboCage cage = GetComponent<TonboCage>();
+        if (cage == null || !cage.enabled || !cage.Available)
+        {
+            Debug.LogWarning("[RotationBurstGame] リング2成功：TonboCage が使えないため捕獲を開始できません");
+            return;
+        }
+        cage.BeginCatch();
+        state = GameState.Cleared;
+        nextSpawnTime = Time.time + nextRingDelay;
+    }
+
+
+    
+/// <summary>
+    /// ハードモード・Cleared中だけ：リング1が未成功（トンボ1がFlying）なら、判定を続ける。
+    /// 成功しても捕獲はすぐ始めず、pendingCatch1 を立てる（虫かごが空いてから開始）。
+    /// </summary>
+    void TickRing1WhileCleared()
+    {
+        if (!hardMode || state != GameState.Cleared || tipTransform == null) return;
+        if (Tonbo1State != TonboState.Flying) { lastAngle = float.NaN; return; } // 気絶・収納済みは再判定しない
+        if (burstCount >= requiredBursts) return; // 成功済み（保留中）
+
+        Vector3 local = Quaternion.Inverse(transform.rotation) * (tipTransform.position - transform.position);
+        float distFromRing = Mathf.Abs(new Vector2(local.x, local.z).magnitude - ringRadius);
+        if (Mathf.Abs(local.y) > depthTolerance || distFromRing > thicknesHalf) { lastAngle = float.NaN; return; }
+
+        float angle = Mathf.Atan2(local.z, local.x) * Mathf.Rad2Deg;
+        if (!float.IsNaN(lastAngle))
+        {
+            float delta = Mathf.Abs(Mathf.DeltaAngle(lastAngle, angle));
+            if (delta > 0f)
+            {
+                cumulativeAngle += delta;
+                int newRotations = Mathf.FloorToInt(cumulativeAngle / 360f);
+                while (rotationsCounted < newRotations) { rotationsCounted++; rotationTimestamps.Enqueue(Time.time); }
+                while (rotationTimestamps.Count > 0 && Time.time - rotationTimestamps.Peek() > burstWindowSeconds) rotationTimestamps.Dequeue();
+
+                bool qualifiedNow = rotationTimestamps.Count >= rotationsPerBurst;
+                if (qualifiedNow && !burstQualifiedLastFrame)
+                {
+                    burstCount++;
+                    flashUntil = Time.time + 0.3f;
+                    SetColor(colorBurst);
+                    PlaySparkle();
+                    if (burstCount >= requiredBursts) pendingCatch1 = true;
+                }
+                burstQualifiedLastFrame = qualifiedNow;
+            }
+        }
+        lastAngle = angle;
+    }
+
+    /// <summary>
+    /// ハードモード：保留されていたリング成功の捕獲を開始する。開始したら true。
+    /// （リング1=従来の OnRingCleared / リング2=気絶化して虫かごの BeginCatch）
+    /// </summary>
+    bool BeginPendingCatch()
+    {
+        if (!hardMode) return false;
+        if (pendingCatch1) { pendingCatch1 = false; OnRingCleared(); return true; }
+        if (pendingCatch2)
+        {
+            pendingCatch2 = false;
+            TonboCage cage = GetComponent<TonboCage>();
+            if (cage == null || !cage.enabled || !cage.Available)
+            {
+                Debug.LogWarning("[RotationBurstGame] リング2成功：TonboCage が使えないため捕獲を開始できません");
+                return false;
+            }
+            MarkTonboStunned(2);
+            cage.BeginCatch();
+            state = GameState.Cleared;
+            flashUntil = Time.time + 0.3f;
+            nextSpawnTime = Time.time + nextRingDelay;
+            return true;
+        }
+        return false;
+    }
+
+void UpdateLinePositions()
     {
         for (int i = 0; i < segments; i++)
         {
@@ -943,10 +1308,11 @@ void UpdateStatusText()
         {
             case GameState.Records:
                 uiText.color = Color.white;
-                uiText.text = string.Format("最高記録 {0}匹", bestScore); // 記録画面：保存済みの最高スコア（HUD上中央）
+                uiText.text = ""; // 最高記録は HUD ではなく RecordsGallery（ギャラリー面）に表示する
                 break;
 
             case GameState.Settings:
+            case GameState.ChooseMode:
             case GameState.ChooseType:
             case GameState.Title:
                 uiText.text = ""; // メニュー系の画面は、ボタン（横長キューブ）のラベルだけで案内する
@@ -954,36 +1320,33 @@ void UpdateStatusText()
 
             case GameState.Waiting:
                 uiText.color = Color.white;
-                uiText.text = string.Format(
-                    "リングをなぞって開始\n({0}秒以内に、1秒間に{1}回転を{2}回)",
-                    sessionTimeLimit, rotationsPerBurst, requiredBursts);
+                uiText.text = ""; // 開始案内はHUDに出さない
                 break;
 
             case GameState.Playing:
-                float remaining = Mathf.Max(0f, sessionTimeLimit - (Time.time - sessionStartTime));
+                float remaining = Mathf.Max(0f, TimeLimit - (Time.time - sessionStartTime));
                 uiText.color = Color.white;
                 if (hudTimeText != null)
                 {
                     hudTimeText.text = string.Format("残り {0:F1}秒", remaining);
-                    uiText.text = string.Format("バースト: {0} / {1}", burstCount, requiredBursts);
+                    uiText.text = ""; // バースト進捗はHUDに出さない（残り時間は左下）
                 }
                 else
                 {
-                    uiText.text = string.Format("残り {0:F1}秒\nバースト: {1} / {2}", remaining, burstCount, requiredBursts);
+                    uiText.text = string.Format("残り {0:F1}秒", remaining);
                 }
                 break;
 
             case GameState.Cleared:
                 uiText.color = colorClear;
-                if (hudTimeText != null && hudCapturing)
+                uiText.text = hudCapturing ? "捕獲しよう！" : ""; // 捕獲フェーズだけ画面中央上に表示（それ以外のクリア時は非表示）
+                if (hardMode && !AllTonboStored && hudTimeText != null && !float.IsNaN(sessionStartTime))
                 {
-                    hudTimeText.text = "捕獲しよう！"; // 虫かご演出中は左下の時間表示の位置に出す
-                    uiText.text = "";
+                    // ハード：捕獲演出中も残り時間を表示（Playing中と同じ計算）
+                    float remainingCaught = Mathf.Max(0f, TimeLimit - (Time.time - sessionStartTime));
+                    hudTimeText.text = string.Format("残り {0:F1}秒", remainingCaught);
                 }
-                else
-                {
-                    uiText.text = "クリア！";
-                }
+
                 break;
 
             case GameState.Failed:

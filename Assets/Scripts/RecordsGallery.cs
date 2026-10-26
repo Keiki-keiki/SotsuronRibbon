@@ -41,6 +41,7 @@ public class RecordsGallery : MonoBehaviour
     private RotationBurstGame game;
     private TonboController tonbo;
     private GameObject galleryRoot;
+    private const string BestScoreKey = "Tonbo_BestScore"; // RotationBurstGame と同じキー（保存の仕組みは変更しない）
     private readonly List<Material> galleryMats = new List<Material>();
 
     void Awake()
@@ -164,6 +165,9 @@ public class RecordsGallery : MonoBehaviour
         // 傾けず、メニューボタンと同じ向きで立てる（文字もモデルも同じ面に並ぶ）。パネル内: X=右、Z=上
         Vector3 galleryPos = game.InitialPos + game.Off(galleryOffset);
         galleryRoot.transform.SetPositionAndRotation(galleryPos, Quaternion.LookRotation(Vector3.up, game.DirToHead(galleryPos)));
+
+        // 最高記録（保存済みスコア Tonbo_BestScore）。HUDではなく、他の記録と同じギャラリー面に表示する
+        AddGalleryLabel(string.Format("最高記録 {0}匹", PlayerPrefs.GetInt(BestScoreKey, 0)), new Vector3(0f, 0f, count == 0 ? 0.18f : recordsCountLocalZ + 0.07f), 1.3f);
 
         if (count == 0)
         {
