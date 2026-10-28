@@ -198,12 +198,20 @@ public class RotationBurstGame : MonoBehaviour
     }
 
     /// <summary>虫かごに入れた：Stunned→Stored（ハードモードのときだけ。TonboCage から呼ぶ）</summary>
-    public void MarkTonboStored(int tonboIndex)
+public void MarkTonboStored(int tonboIndex)
     {
         if (!hardMode) return;
-        if (tonboIndex == 1 && Tonbo1State == TonboState.Stunned) Tonbo1State = TonboState.Stored;
-        else if (tonboIndex == 2 && Tonbo2State == TonboState.Stunned) Tonbo2State = TonboState.Stored;
+        if (tonboIndex == 1 && Tonbo1State == TonboState.Stunned) { Tonbo1State = TonboState.Stored; AddScore(); } // ハード：1匹収納した瞬間に+1
+        else if (tonboIndex == 2 && Tonbo2State == TonboState.Stunned) { Tonbo2State = TonboState.Stored; AddScore(); }
     }
+
+/// <summary>捕まえた匹数を+1し、最高記録を更新・保存する</summary>
+    void AddScore()
+    {
+        score++;
+        if (score > bestScore) { bestScore = score; PlayerPrefs.SetInt(BestScoreKey, bestScore); PlayerPrefs.Save(); }
+    }
+
 
     void ResetTonboStates()
     {
@@ -267,6 +275,8 @@ public class RotationBurstGame : MonoBehaviour
     [Tooltip("ゲームオーバーになってから、自動でメニューに戻るまでの時間（秒）")]
     public float gameOverReturnSeconds = 3f;
     private float failedTime = 0f;
+    private float nextLogoSearch = 0f; // ロゴの検索を1秒に1回に制限する（GameObject.Findの毎フレーム呼び出し対策）
+
 
     System.Collections.IEnumerator Start()
     {
@@ -556,7 +566,7 @@ void EnterSettings()
     void Update()
     {
         // タイトル画面のときだけ Libel Spiral ロゴを表示する
-        if (titleLogo == null) titleLogo = GameObject.Find("LibelSpiralLogo");
+        if (titleLogo == null && Time.time >= nextLogoSearch) { titleLogo = GameObject.Find("LibelSpiralLogo"); nextLogoSearch = Time.time + 1f; }
         if (titleLogo != null) { bool showLogo = (state == GameState.Title); if (titleLogo.activeSelf != showLogo) titleLogo.SetActive(showLogo); }
         if (ready && stakes != null) stakes.EnsureBuilt(); // 杭は最初から水辺に立てておく（常時表示）
         // トンボが杭に着地するまでは、リング（円）を表示しない
@@ -662,7 +672,7 @@ if (cageFinished)
                 }
                 else
                 {
-                    if (!escaped) { score++; if (score > bestScore) { bestScore = score; PlayerPrefs.SetInt(BestScoreKey, bestScore); PlayerPrefs.Save(); } }
+                    if (!escaped && !hardMode) AddScore(); // ノーマルのみここで+1（ハードは MarkTonboStored で収納ごとに加算済み）
                     HideTonbo(); SpawnNextRing();
                 }
             }
@@ -1087,7 +1097,7 @@ ring2.cumulativeAngle += delta;
                     ring2.burstCount++;
                     if (ring2.burstCount >= requiredBursts)
                     {
-                        if (state == GameState.Cleared) pendingCatch2 = true; // 捕獲演出中：虫かごが空いてから気絶化＋捕獲
+                        if (state == GameState.Cleared) { pendingCatch2 = true; Debug.Log("[HardDebug] pendingCatch2=true"); } // 捕獲演出中：虫かごが空いてから気絶化＋捕獲
                         else { MarkTonboStunned(2); OnSecondRingCleared(); }
                     } // リング2成功→トンボ2は Flying→Stunned、捕獲を開始
                 }
@@ -1161,21 +1171,22 @@ ring2.cumulativeAngle += delta;
     /// ハードモード：保留されていたリング成功の捕獲を開始する。開始したら true。
     /// （リング1=従来の OnRingCleared / リング2=気絶化して虫かごの BeginCatch）
     /// </summary>
-    bool BeginPendingCatch()
+bool BeginPendingCatch()
     {
         if (!hardMode) return false;
         if (pendingCatch1) { pendingCatch1 = false; OnRingCleared(); return true; }
         if (pendingCatch2)
         {
-            pendingCatch2 = false;
+            Debug.Log("[HardDebug] BeginPendingCatch pendingCatch2");
+            pendingCatch2 = false;       // 1. 保留フラグを消す
+            MarkTonboStunned(2);         // 2. 先にトンボ2を Flying→Stunned にする
             TonboCage cage = GetComponent<TonboCage>();
-            if (cage == null || !cage.enabled || !cage.Available)
+            if (cage == null || !cage.enabled || !cage.Available) // 3. そのあと虫かごが使えるか確認
             {
                 Debug.LogWarning("[RotationBurstGame] リング2成功：TonboCage が使えないため捕獲を開始できません");
                 return false;
             }
-            MarkTonboStunned(2);
-            cage.BeginCatch();
+            cage.BeginCatch();           // 4. 使えるなら捕獲開始
             state = GameState.Cleared;
             flashUntil = Time.time + 0.3f;
             nextSpawnTime = Time.time + nextRingDelay;
@@ -1289,7 +1300,7 @@ void CreateHud(Transform head)
 void UpdateStatusText()
     {
         if (uiText == null) return;
-        if (hudTimeText != null) hudTimeText.text = ""; // 残り時間はプレイ中だけ表示
+        string timeStr = ""; // 残り時間はプレイ中だけ表示（左下テキストへは最後に変化したときだけ代入する）
         if (hudScoreText != null) // 右下：スコア（プレイ中の画面だけ表示）
             hudScoreText.text = (state == GameState.Waiting || state == GameState.Playing || state == GameState.Cleared || state == GameState.Failed) ? string.Format("{0}匹", score) : "";
 
@@ -1328,7 +1339,7 @@ void UpdateStatusText()
                 uiText.color = Color.white;
                 if (hudTimeText != null)
                 {
-                    hudTimeText.text = string.Format("残り {0:F1}秒", remaining);
+                    timeStr = string.Format("残り {0:F1}秒", remaining);
                     uiText.text = ""; // バースト進捗はHUDに出さない（残り時間は左下）
                 }
                 else
@@ -1344,7 +1355,7 @@ void UpdateStatusText()
                 {
                     // ハード：捕獲演出中も残り時間を表示（Playing中と同じ計算）
                     float remainingCaught = Mathf.Max(0f, TimeLimit - (Time.time - sessionStartTime));
-                    hudTimeText.text = string.Format("残り {0:F1}秒", remainingCaught);
+                    timeStr = string.Format("残り {0:F1}秒", remainingCaught);
                 }
 
                 break;
@@ -1356,5 +1367,6 @@ void UpdateStatusText()
                     gameOverReturnSeconds);
                 break;
         }
+        if (hudTimeText != null && hudTimeText.text != timeStr) hudTimeText.text = timeStr; // 変化したときだけ更新（毎フレームの空↔文字列の切り替えによるテキスト再構築を避ける）
     }
 }
