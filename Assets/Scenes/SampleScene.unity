@@ -367,9 +367,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fe8d72e5a311d49efb3759d3905a3184, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  stickLength: 0.6
+  stickLength: 0.7
   stickRadius: 0.01
-  pitchDownDegrees: 35
+  pitchDownDegrees: 40
   stickOffset: {x: -0.02, y: -0.02, z: 0.05}
 --- !u!114 &234781395
 MonoBehaviour:
