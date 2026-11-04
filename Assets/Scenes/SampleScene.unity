@@ -369,7 +369,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   stickLength: 0.6
   stickRadius: 0.01
-  pitchDownDegrees: 30
+  pitchDownDegrees: 35
   stickOffset: {x: -0.02, y: -0.02, z: 0.05}
 --- !u!114 &234781395
 MonoBehaviour:
