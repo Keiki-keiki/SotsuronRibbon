@@ -21,6 +21,14 @@ void Awake()
 
     private GameObject stick;
 
+    [Tooltip("棒を手の前方向から下に傾ける角度（度）。大きいほど先端が下がる")]
+    public float pitchDownDegrees = 20f;
+
+    // ---- 手のモデル（OVRSkeleton）のボーンへの追従 ----
+    private Transform pivotT;
+    private OVRSkeleton boundSkeleton;
+
+
     // ---- 棒を持つ手（右／左）の切り替え ----
     public static RightHandStick Instance { get; private set; }
     /// <summary>true: 左手に棒を持つ / false: 右手に棒を持つ</summary>
@@ -36,7 +44,12 @@ void Awake()
         stick = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         stick.name = "RightHandStick";
         Destroy(stick.GetComponent<CapsuleCollider>());
-        stick.transform.SetParent(this.transform, false);
+        GameObject pivot = new GameObject("StickPivot");
+        pivot.transform.SetParent(this.transform, false);
+        pivot.transform.localRotation = Quaternion.Euler(pitchDownDegrees, 0f, 0f);
+        stick.transform.SetParent(pivot.transform, false);
+        pivotT = pivot.transform;
+
         stick.transform.localScale = new Vector3(stickRadius * 2f, stickLength / 2f, stickRadius * 2f);
         stick.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
         stick.transform.localPosition = new Vector3(0f, 0f, stickLength / 2f);
@@ -45,7 +58,7 @@ void Awake()
         GameObject tip = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         tip.name = "RightHandStickTip";
         Destroy(tip.GetComponent<SphereCollider>());
-        tip.transform.SetParent(this.transform, false);
+        tip.transform.SetParent(pivot.transform, false);
         float tipRadius = stickRadius * 2.5f;
         tip.transform.localScale = Vector3.one * tipRadius * 2f;
         tip.transform.localPosition = new Vector3(0f, 0f, stickLength);
@@ -61,6 +74,30 @@ void Awake()
 
         InitHandSide();
     }
+
+/// <summary>棒を平滑化アンカーではなく、手のモデルの手首ボーンの子にして、手と完全に同期させる。切り替え時は自動で付け替える</summary>
+    void Update()
+    {
+        if (pivotT == null) return;
+        Transform src = UseLeft ? leftSource : rightSource;
+        OVRHand hand = UseLeft ? leftConfidence : rightConfidence;
+        if (src == null || hand == null) return;
+
+        OVRSkeleton sk = hand.GetComponent<OVRSkeleton>();
+        if (sk == null) sk = hand.GetComponentInChildren<OVRSkeleton>(true);
+        if (sk == null || sk == boundSkeleton) return;
+        if (!hand.IsTracked || !sk.IsInitialized || sk.Bones == null || sk.Bones.Count == 0) return;
+
+        Transform bone = sk.Bones[0].Transform; // 手首ルート
+        if (bone == null) return;
+
+        // 生のアンカー姿勢（平滑化なし）に棒を合わせた状態でボーンの子にする
+        Quaternion rot = src.rotation * Quaternion.Euler(pitchDownDegrees, 0f, 0f);
+        pivotT.SetParent(bone, false);
+        pivotT.SetPositionAndRotation(src.position, rot);
+        boundSkeleton = sk;
+    }
+
 
 
 /// <summary>平滑化アンカーの元になる右手・左手のTransformを控え、保存された設定を反映する</summary>

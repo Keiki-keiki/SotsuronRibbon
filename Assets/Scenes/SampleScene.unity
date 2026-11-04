@@ -369,6 +369,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   stickLength: 0.6
   stickRadius: 0.01
+  pitchDownDegrees: 25
 --- !u!114 &234781395
 MonoBehaviour:
   m_ObjectHideFlags: 0
