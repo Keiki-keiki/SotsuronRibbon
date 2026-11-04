@@ -24,6 +24,12 @@ void Awake()
     [Tooltip("棒を手の前方向から下に傾ける角度（度）。大きいほど先端が下がる")]
     public float pitchDownDegrees = 20f;
 
+    [Tooltip("棒の根元の位置オフセット（メートル）。手の向き基準で X=右, Y=上, Z=前。再生中にも変更できる")]
+    public Vector3 stickOffset = Vector3.zero;
+    private Vector3 baseLocalPos;
+    private Quaternion boneToAnchor = Quaternion.identity;
+
+
     // ---- 手のモデル（OVRSkeleton）のボーンへの追従 ----
     private Transform pivotT;
     private OVRSkeleton boundSkeleton;
@@ -76,9 +82,28 @@ void Awake()
     }
 
 /// <summary>棒を平滑化アンカーではなく、手のモデルの手首ボーンの子にして、手と完全に同期させる。切り替え時は自動で付け替える</summary>
-    void Update()
+void Update()
     {
         if (pivotT == null) return;
+        TryBindToBone();
+
+        Quaternion pitch = Quaternion.Euler(pitchDownDegrees, 0f, 0f);
+        if (boundSkeleton != null)
+        {
+            // ボーン基準。オフセットとピッチは手の向き（アンカー基準）で適用する
+            pivotT.localPosition = baseLocalPos + boneToAnchor * stickOffset;
+            pivotT.localRotation = boneToAnchor * pitch;
+        }
+        else
+        {
+            pivotT.localPosition = stickOffset;
+            pivotT.localRotation = pitch;
+        }
+    }
+
+    /// <summary>棒を手のモデルの手首ボーンの子にして、手と完全に同期させる。手の切り替え時は付け替える</summary>
+    void TryBindToBone()
+    {
         Transform src = UseLeft ? leftSource : rightSource;
         OVRHand hand = UseLeft ? leftConfidence : rightConfidence;
         if (src == null || hand == null) return;
@@ -91,10 +116,10 @@ void Awake()
         Transform bone = sk.Bones[0].Transform; // 手首ルート
         if (bone == null) return;
 
-        // 生のアンカー姿勢（平滑化なし）に棒を合わせた状態でボーンの子にする
-        Quaternion rot = src.rotation * Quaternion.Euler(pitchDownDegrees, 0f, 0f);
+        // 生のアンカー姿勢（平滑化なし）との差を記録してボーンの子にする
+        baseLocalPos = bone.InverseTransformPoint(src.position);
+        boneToAnchor = Quaternion.Inverse(bone.rotation) * src.rotation;
         pivotT.SetParent(bone, false);
-        pivotT.SetPositionAndRotation(src.position, rot);
         boundSkeleton = sk;
     }
 
