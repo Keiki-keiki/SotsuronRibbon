@@ -158,6 +158,12 @@ public class RotationBurstGame : MonoBehaviour
     private readonly Queue<float> rotationTimestamps = new Queue<float>();
     private bool burstQualifiedLastFrame = false;
     private int burstCount = 0;
+    [Tooltip("ノーマル：速い回転（burstWindowSeconds以内にrotationsPerBurst回以上）を維持した累計秒数がこれに達したらクリア")]
+    public float requiredFastSeconds = 5f;
+    private float fastSeconds = 0f;
+    [Tooltip("リング1：この秒数以内のはみ出しは、はみ出し判定にしない（なぞり続けているとみなす）")]
+    public float outOfBoundsGrace = 0.2f;
+    private float outOfBoundsSince = float.NaN;
 
     // ---- ハードモード用：リング2の独立した判定状態（リング1は上の既存フィールドをそのまま使う） ----
     private class RingJudge
@@ -168,10 +174,12 @@ public class RotationBurstGame : MonoBehaviour
         public readonly Queue<float> rotationTimestamps = new Queue<float>();
         public bool burstQualifiedLastFrame = false;
         public int burstCount = 0;
+        public float fastSeconds = 0f;
+        public float outSince = float.NaN;
         public void Reset()
         {
             lastAngle = float.NaN; cumulativeAngle = 0f; rotationsCounted = 0;
-            rotationTimestamps.Clear(); burstQualifiedLastFrame = false; burstCount = 0;
+            rotationTimestamps.Clear(); burstQualifiedLastFrame = false; burstCount = 0; fastSeconds = 0f; outSince = float.NaN;
         }
     }
     private readonly RingJudge ring2 = new RingJudge();
@@ -220,9 +228,9 @@ public void MarkTonboStored(int tonboIndex)
     }
 
     /// <summary>リング1のバースト達成数が必要数に達したか</summary>
-    public bool Ring1Success { get { return burstCount >= requiredBursts; } }
+    public bool Ring1Success { get { return fastSeconds >= requiredFastSeconds; } }
     /// <summary>リング2のバースト達成数が必要数に達したか（ハードモードのときだけ）</summary>
-    public bool Ring2Success { get { return hardMode && ring2.burstCount >= requiredBursts; } }
+    public bool Ring2Success { get { return hardMode && ring2.fastSeconds >= requiredFastSeconds; } }
     /// <summary>両方のリングが成功したか（ハードモードのときだけ）</summary>
     public bool BothRingsSuccess { get { return Ring1Success && Ring2Success; } }
 
@@ -731,6 +739,14 @@ Vector3 local = Quaternion.Inverse(transform.rotation) * (tipTransform.position 
         }
 
         // デバッグ表示用
+        if (outOfBounds)
+        {
+            // はみ出しの猶予：outOfBoundsGrace秒以内なら、まだリング上にいるものとして扱う
+            if (float.IsNaN(outOfBoundsSince)) outOfBoundsSince = Time.time;
+            if (Time.time - outOfBoundsSince <= outOfBoundsGrace) outOfBounds = false;
+        }
+        else outOfBoundsSince = float.NaN;
+
         dbgHasTip = true;
         dbgLocalY = local.y;
         dbgDistFromRing = distFromRing;
@@ -778,6 +794,7 @@ Vector3 local = Quaternion.Inverse(transform.rotation) * (tipTransform.position 
                 }
 
                 bool burstQualifiedNow = rotationTimestamps.Count >= rotationsPerBurst;
+                if (burstQualifiedNow) fastSeconds += Time.deltaTime; // ノーマル：速い回転を保っている時間を累計
                 if (burstQualifiedNow && !burstQualifiedLastFrame)
                 {
                     burstCount++;
@@ -785,13 +802,10 @@ Vector3 local = Quaternion.Inverse(transform.rotation) * (tipTransform.position 
                     SetColor(colorBurst);
                     PlaySparkle();
 
-                    if (burstCount >= requiredBursts)
-                    {
-                        OnRingCleared();
-                        flashUntil = Time.time + 0.3f;
-                    }
+                    // （クリア判定は累計秒数で行う：下の fastSeconds チェック）
                 }
                 burstQualifiedLastFrame = burstQualifiedNow;
+                if (state == GameState.Playing && fastSeconds >= requiredFastSeconds) { OnRingCleared(); flashUntil = Time.time + 0.3f; }
             }
         }
         lastAngle = angle;
@@ -816,7 +830,7 @@ void CheckTimeout()
 
         float elapsed = Time.time - sessionStartTime;
         // ノーマル：従来どおり / ハード：制限時間内に両方 Stored になっていなければ失敗
-        bool unfinished = hardMode ? !AllTonboStored : (burstCount < requiredBursts);
+        bool unfinished = hardMode ? !AllTonboStored : (fastSeconds < requiredFastSeconds);
         if (elapsed >= TimeLimit && unfinished)
         {
             state = GameState.Failed;
@@ -867,6 +881,8 @@ void ResetRingProgress()
 
         burstQualifiedLastFrame = false;
         burstCount = 0;
+        fastSeconds = 0f;
+        outOfBoundsSince = float.NaN;
         flashUntil = -1f;
     }
 
@@ -1061,17 +1077,20 @@ public void ChooseSpawnPose(out Vector3 center, out Quaternion rot)
             ring2.lastAngle = float.NaN;
             return;
         }
-        if (ring2.burstCount >= requiredBursts) return; // 成功済み（次のリングまで状態を保持）
+        if (ring2.fastSeconds >= requiredFastSeconds) return; // 成功済み（次のリングまで状態を保持）
         if (Tonbo2State != TonboState.Flying) return; // 気絶・収納済みのトンボ2はリング判定しない
 
 
         Vector3 local = Quaternion.Inverse(tonbo.SecondStakeRot) * (tipTransform.position - tonbo.SecondStakePos);
         float distFromRing = Mathf.Abs(new Vector2(local.x, local.z).magnitude - ringRadius);
-        if (Mathf.Abs(local.y) > depthTolerance || distFromRing > thicknesHalf)
+        bool out2 = Mathf.Abs(local.y) > depthTolerance || distFromRing > thicknesHalf;
+        if (out2)
         {
-            ring2.lastAngle = float.NaN; // 外れている間は角度追跡だけリセット
-            return;
+            // はみ出しの猶予：outOfBoundsGrace秒以内なら、まだリング上にいるものとして扱う
+            if (float.IsNaN(ring2.outSince)) ring2.outSince = Time.time;
+            if (Time.time - ring2.outSince > outOfBoundsGrace) { ring2.lastAngle = float.NaN; return; }
         }
+        else ring2.outSince = float.NaN;
 
         float angle = Mathf.Atan2(local.z, local.x) * Mathf.Rad2Deg;
         if (!float.IsNaN(ring2.lastAngle))
@@ -1092,16 +1111,18 @@ ring2.cumulativeAngle += delta;
                     ring2.rotationTimestamps.Dequeue();
 
                 bool qualifiedNow = ring2.rotationTimestamps.Count >= rotationsPerBurst;
+                if (qualifiedNow) ring2.fastSeconds += Time.deltaTime;
                 if (qualifiedNow && !ring2.burstQualifiedLastFrame)
                 {
                     ring2.burstCount++;
-                    if (ring2.burstCount >= requiredBursts)
-                    {
-                        if (state == GameState.Cleared) { pendingCatch2 = true; Debug.Log("[HardDebug] pendingCatch2=true"); } // 捕獲演出中：虫かごが空いてから気絶化＋捕獲
-                        else { MarkTonboStunned(2); OnSecondRingCleared(); }
-                    } // リング2成功→トンボ2は Flying→Stunned、捕獲を開始
+                    // （成功判定は累計秒数で行う：下の fastSeconds チェック） // リング2成功→トンボ2は Flying→Stunned、捕獲を開始
                 }
                 ring2.burstQualifiedLastFrame = qualifiedNow;
+                if (ring2.fastSeconds >= requiredFastSeconds)
+                {
+                    if (state == GameState.Cleared) pendingCatch2 = true; // 捕獲演出中：虫かごが空いてから気絶化＋捕獲
+                    else { MarkTonboStunned(2); OnSecondRingCleared(); }
+                }
             }
         }
         ring2.lastAngle = angle;
@@ -1135,11 +1156,18 @@ ring2.cumulativeAngle += delta;
     {
         if (!hardMode || state != GameState.Cleared || tipTransform == null) return;
         if (Tonbo1State != TonboState.Flying) { lastAngle = float.NaN; return; } // 気絶・収納済みは再判定しない
-        if (burstCount >= requiredBursts) return; // 成功済み（保留中）
+        if (fastSeconds >= requiredFastSeconds) return; // 成功済み（保留中）
 
         Vector3 local = Quaternion.Inverse(transform.rotation) * (tipTransform.position - transform.position);
         float distFromRing = Mathf.Abs(new Vector2(local.x, local.z).magnitude - ringRadius);
-        if (Mathf.Abs(local.y) > depthTolerance || distFromRing > thicknesHalf) { lastAngle = float.NaN; return; }
+        bool outC = Mathf.Abs(local.y) > depthTolerance || distFromRing > thicknesHalf;
+        if (outC)
+        {
+            // はみ出しの猶予（リング1と共通）
+            if (float.IsNaN(outOfBoundsSince)) outOfBoundsSince = Time.time;
+            if (Time.time - outOfBoundsSince > outOfBoundsGrace) { lastAngle = float.NaN; return; }
+        }
+        else outOfBoundsSince = float.NaN;
 
         float angle = Mathf.Atan2(local.z, local.x) * Mathf.Rad2Deg;
         if (!float.IsNaN(lastAngle))
@@ -1153,13 +1181,15 @@ ring2.cumulativeAngle += delta;
                 while (rotationTimestamps.Count > 0 && Time.time - rotationTimestamps.Peek() > burstWindowSeconds) rotationTimestamps.Dequeue();
 
                 bool qualifiedNow = rotationTimestamps.Count >= rotationsPerBurst;
+                if (qualifiedNow) fastSeconds += Time.deltaTime;
+                if (fastSeconds >= requiredFastSeconds) pendingCatch1 = true;
                 if (qualifiedNow && !burstQualifiedLastFrame)
                 {
                     burstCount++;
                     flashUntil = Time.time + 0.3f;
                     SetColor(colorBurst);
                     PlaySparkle();
-                    if (burstCount >= requiredBursts) pendingCatch1 = true;
+                    // （保留フラグは累計秒数で立てる：上のチェック）
                 }
                 burstQualifiedLastFrame = qualifiedNow;
             }

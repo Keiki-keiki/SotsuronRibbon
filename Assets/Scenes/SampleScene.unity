@@ -1019,9 +1019,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 24bf3b4a481ef48ea91e21e292bde74e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  ringRadius: 0.15
-  sessionTimeLimit: 7
-  hardSessionTimeLimit: 14
+  ringRadius: 0.18
+  sessionTimeLimit: 10
+  hardSessionTimeLimit: 20
   burstWindowSeconds: 1
   rotationsPerBurst: 4
   requiredBursts: 3
@@ -1043,6 +1043,8 @@ MonoBehaviour:
   hudHeight: 480
   hudScale: 0.001
   hudMargin: 40
+  requiredFastSeconds: 5
+  outOfBoundsGrace: 0.2
   gameOverReturnSeconds: 3
 --- !u!114 &827056174
 MonoBehaviour:
