@@ -70,6 +70,7 @@ public class TonboCage : MonoBehaviour
     private float escapeStart;
     private Vector3 escapeFrom;
     private Vector3 escapeDir;
+    // （逃げられたのは捕獲対象の1匹だけ。残りの気絶中の1匹は、そのまま次の捕獲に進む）
 
     private RotationBurstGame game;
     private TonboController tonbo;
@@ -401,6 +402,7 @@ bool TickSinking()
         escapeFrom = tonboTf.position;
         Vector3 away = -game.DirToHead(escapeFrom);
         escapeDir = (away + Vector3.up * 0.6f).normalized;
+        if (game != null) game.MarkTonboEscaped(targetIndex); // ハード：逃げたトンボを Stunned→Escaped にする
         escapeStart = Time.time;
         if (cage != null) sinkFrom = cage.transform.position;
         phase = Phase.Escaping;
@@ -411,6 +413,7 @@ bool TickSinking()
         float k = Mathf.Clamp01((Time.time - escapeStart) / Mathf.Max(0.1f, escapeSeconds));
         tonboTf.position = escapeFrom + escapeDir * (escapeDistance * k * k); // だんだん加速して離れる
         tonboTf.rotation = Quaternion.LookRotation(escapeDir, Vector3.up);
+        // （逃げるのは捕獲対象の1匹のみ）
         if (cage != null)
         {
             float e = Mathf.SmoothStep(0f, 1f, k);
@@ -429,7 +432,7 @@ void Finish()
         if (game != null && game.HardMode && tonbo != null)
         {
             RotationBurstGame.TonboState st = (targetIndex == 2) ? game.Tonbo2State : game.Tonbo1State;
-            if (st == RotationBurstGame.TonboState.Stored) tonbo.HideOne(targetIndex);
+            if (st == RotationBurstGame.TonboState.Stored || st == RotationBurstGame.TonboState.Escaped) tonbo.HideOne(targetIndex); // 収納済み・逃げたトンボを非表示にする
         }
         DestroyCage();
         phase = Phase.Idle;
